@@ -17,6 +17,9 @@ public class QrScanHistory {
     @Column(name = "employee_id")
     private Long employeeId;
     
+    @Column(name = "employee_name")
+    private String employeeName;
+    
     @Column(name = "scan_type", nullable = false)
     private String scanType; // CHECK_IN, CHECK_OUT
     
@@ -59,6 +62,14 @@ public class QrScanHistory {
     
     public void setEmployeeId(Long employeeId) {
         this.employeeId = employeeId;
+    }
+    
+    public String getEmployeeName() {
+        return employeeName;
+    }
+    
+    public void setEmployeeName(String employeeName) {
+        this.employeeName = employeeName;
     }
     
     public String getScanType() {
