@@ -17,6 +17,9 @@ public class TempEmpQr {
     @Column(name = "employee_id", nullable = false)
     private Long employeeId;
     
+    @Column(name = "employee_name")
+    private String employeeName;
+    
     @Column(name = "start_time", nullable = false)
     private LocalDateTime startTime;
     
@@ -63,6 +66,14 @@ public class TempEmpQr {
     
     public void setEmployeeId(Long employeeId) {
         this.employeeId = employeeId;
+    }
+    
+    public String getEmployeeName() {
+        return employeeName;
+    }
+    
+    public void setEmployeeName(String employeeName) {
+        this.employeeName = employeeName;
     }
     
     public LocalDateTime getStartTime() {
