@@ -50,6 +50,7 @@ public class TempQrService {
             QrScanHistory history = new QrScanHistory();
             history.setQrId(request.getQrId());
             history.setEmployeeId(mapping.getEmployeeId());
+            history.setEmployeeName(mapping.getEmployeeName());
             history.setScanType("CHECK_OUT");
             history.setScannedBy(request.getScannedBy());
             history.setTempQrMappingId(mapping.getId());
@@ -91,6 +92,7 @@ public class TempQrService {
             TempEmpQr newMapping = new TempEmpQr();
             newMapping.setQrId(request.getQrId());
             newMapping.setEmployeeId(request.getEmployeeId());
+            newMapping.setEmployeeName(employee.get().getEmpName());
             newMapping.setStartTime(LocalDateTime.now());
             newMapping.setStatus("ACTIVE");
             newMapping.setCreatedBy(request.getScannedBy());
@@ -100,6 +102,7 @@ public class TempQrService {
             QrScanHistory history = new QrScanHistory();
             history.setQrId(request.getQrId());
             history.setEmployeeId(request.getEmployeeId());
+            history.setEmployeeName(employee.get().getEmpName());
             history.setScanType("CHECK_IN");
             history.setScannedBy(request.getScannedBy());
             history.setTempQrMappingId(newMapping.getId());
@@ -148,6 +151,7 @@ public class TempQrService {
             QrScanHistory history = new QrScanHistory();
             history.setQrId(tempQr.getQrId());
             history.setEmployeeId(tempQr.getEmployeeId());
+            history.setEmployeeName(tempQr.getEmployeeName());
             history.setScanType("MANUAL_UNMAP");
             history.setScannedBy(unmappedBy);
             history.setTempQrMappingId(mappingId);
