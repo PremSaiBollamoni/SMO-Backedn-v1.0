@@ -128,11 +128,17 @@ public class EnhancedTrackingService {
 
         Bin bin = binOpt.get();
 
+        // Auto-detect operation from bin if not provided
+        Long operationId = request.getOperationId();
+        if (operationId == null && bin.getCurrentOperationId() != null) {
+            operationId = bin.getCurrentOperationId();
+        }
+
         // Validate operation can be completed (sequence check)
-        if (request.getOperationId() != null && bin.getCurrentOperationId() != null) {
+        if (operationId != null && bin.getCurrentOperationId() != null) {
             Map<String, Object> validationResult = routingProgressionService.validateOperationCompletion(
                 bin.getBinId(), 
-                request.getOperationId()
+                operationId
             );
             
             if (!(Boolean) validationResult.getOrDefault("valid", false)) {
@@ -172,10 +178,10 @@ public class EnhancedTrackingService {
 
         // Advance bin to next operation in routing sequence
         Map<String, Object> progressionResult = null;
-        if (request.getOperationId() != null) {
+        if (operationId != null) {
             progressionResult = routingProgressionService.advanceToNextOperation(
                 bin.getBinId(), 
-                request.getOperationId()
+                operationId
             );
         }
 
@@ -223,10 +229,7 @@ public class EnhancedTrackingService {
     private WipTracking createWipTrackingRecord(TempActiveAssignment assignment, TrackingRequest request, Bin bin) {
         WipTracking tracking = new WipTracking();
         
-        // Generate new WIP ID
-        Long maxId = wipTrackingRepository.findMaxWipTrackingId();
-        tracking.setWipId(maxId != null ? maxId + 1 : 1L);
-        
+        // Don't set wipId - let database auto-generate it
         tracking.setOperatorId(assignment.getEmpId());
         tracking.setStartTime(assignment.getStartTime());
         tracking.setEndTime(LocalDateTime.now());
@@ -235,9 +238,13 @@ public class EnhancedTrackingService {
         // FIX: Populate bin_id from resolved bin
         tracking.setBinId(bin.getBinId());
         
-        // FIX: Populate operation_id from request
-        if (request.getOperationId() != null) {
-            tracking.setOperationId(request.getOperationId());
+        // FIX: Use operation_id from request or auto-detect from bin
+        Long operationId = request.getOperationId();
+        if (operationId == null && bin.getCurrentOperationId() != null) {
+            operationId = bin.getCurrentOperationId();
+        }
+        if (operationId != null) {
+            tracking.setOperationId(operationId);
         }
         
         // Set quantity from bin
