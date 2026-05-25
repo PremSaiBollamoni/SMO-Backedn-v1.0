@@ -9,6 +9,7 @@ import java.time.LocalDateTime;
 @Table(name = "wiptracking")
 public class WipTracking {
     @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
     @Column(name = "wip_id")
     private Long wipId;
 
