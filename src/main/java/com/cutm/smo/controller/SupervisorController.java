@@ -10,6 +10,7 @@ import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
 import java.util.Map;
+import java.util.HashMap;
 
 @RestController
 @RequestMapping("/api/supervisor")
@@ -96,8 +97,32 @@ public class SupervisorController {
      */
     @PostMapping("/qr-assignment")
     public ResponseEntity<Map<String, Object>> submitQrAssignment(@RequestBody QrAssignmentRequest request) {
-        Map<String, Object> response = supervisorService.submitQrAssignment(request);
-        return ResponseEntity.ok(response);
+        try {
+            System.out.println("[SUPERVISOR_CONTROLLER] === QR ASSIGNMENT REQUEST START ===");
+            System.out.println("[SUPERVISOR_CONTROLLER] Request: " + request);
+            System.out.println("[SUPERVISOR_CONTROLLER] QR Code: " + request.getQrCode());
+            System.out.println("[SUPERVISOR_CONTROLLER] Process Plan: " + request.getProcessPlanNumber());
+            System.out.println("[SUPERVISOR_CONTROLLER] Tray Quantity: " + request.getTrayQuantity());
+            
+            Map<String, Object> response = supervisorService.submitQrAssignment(request);
+            
+            System.out.println("[SUPERVISOR_CONTROLLER] Response: " + response);
+            System.out.println("[SUPERVISOR_CONTROLLER] === QR ASSIGNMENT REQUEST END ===");
+            return ResponseEntity.ok(response);
+        } catch (Exception e) {
+            System.out.println("[SUPERVISOR_CONTROLLER] EXCEPTION CAUGHT IN QR ASSIGNMENT");
+            System.out.println("[SUPERVISOR_CONTROLLER] Exception type: " + e.getClass().getSimpleName());
+            System.out.println("[SUPERVISOR_CONTROLLER] Exception message: " + e.getMessage());
+            e.printStackTrace();
+            
+            Map<String, Object> errorResponse = new HashMap<>();
+            errorResponse.put("success", false);
+            errorResponse.put("message", "Error in QR assignment: " + e.getMessage());
+            errorResponse.put("errorType", "SYSTEM_ERROR");
+            errorResponse.put("exceptionClass", e.getClass().getSimpleName());
+            
+            return ResponseEntity.ok(errorResponse);
+        }
     }
 
     /**
