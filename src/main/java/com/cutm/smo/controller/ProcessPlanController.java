@@ -3,10 +3,14 @@ package com.cutm.smo.controller;
 import com.cutm.smo.dto.NodeMetricsResponse;
 import com.cutm.smo.dto.ProcessPlanDraftRequest;
 import com.cutm.smo.dto.ProcessPlanResponse;
+import com.cutm.smo.dto.WorkflowEdge;
 import com.cutm.smo.services.AccessControlService;
 import com.cutm.smo.services.NodeMetricsService;
 import com.cutm.smo.services.ProcessPlanService;
 import com.cutm.smo.util.LoggingUtil;
+import com.cutm.smo.repositories.BinRepository;
+import com.cutm.smo.repositories.WipTrackingRepository;
+import com.cutm.smo.repositories.BinAssignmentHistoryRepository;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.server.ResponseStatusException;
 import org.springframework.http.HttpStatus;
@@ -25,11 +29,18 @@ public class ProcessPlanController {
     private final ProcessPlanService processPlanService;
     private final AccessControlService accessControlService;
     private final NodeMetricsService nodeMetricsService;
+    private final BinRepository binRepository;
+    private final WipTrackingRepository wipTrackingRepository;
+    private final BinAssignmentHistoryRepository binAssignmentHistoryRepository;
 
-    public ProcessPlanController(ProcessPlanService processPlanService, AccessControlService accessControlService, NodeMetricsService nodeMetricsService) {
+    public ProcessPlanController(ProcessPlanService processPlanService, AccessControlService accessControlService, NodeMetricsService nodeMetricsService,
+            BinRepository binRepository, WipTrackingRepository wipTrackingRepository, BinAssignmentHistoryRepository binAssignmentHistoryRepository) {
         this.processPlanService = processPlanService;
         this.accessControlService = accessControlService;
         this.nodeMetricsService = nodeMetricsService;
+        this.binRepository = binRepository;
+        this.wipTrackingRepository = wipTrackingRepository;
+        this.binAssignmentHistoryRepository = binAssignmentHistoryRepository;
     }
 
     @PostMapping("/draft")
@@ -322,5 +333,145 @@ public class ProcessPlanController {
             }
         }
         return nodeMetricsService.getNodeMetrics(routingId, operationId);
+    }
+
+    @GetMapping("/operation-status")
+    public Map<String, Object> getOperationStatus(
+            @RequestParam Long routingId,
+            @RequestParam Long operationId) {
+        long startTime = System.currentTimeMillis();
+        try {
+            log.info("=== GET OPERATION STATUS START ===");
+            log.debug("Routing ID: {}", routingId);
+            log.debug("Operation ID: {}", operationId);
+            
+            // Get the process plan to find the operation
+            ProcessPlanResponse plan = processPlanService.getProcessPlan(routingId);
+            
+            // Find the operation
+            ProcessPlanResponse.OperationResponse operation = null;
+            if (plan.getOperations() != null) {
+                operation = plan.getOperations().stream()
+                    .filter(op -> op.getOperationId().equals(operationId))
+                    .findFirst()
+                    .orElse(null);
+            }
+            
+            if (operation == null) {
+                throw new ResponseStatusException(HttpStatus.NOT_FOUND, 
+                    "Operation not found: " + operationId);
+            }
+            
+            // Build operation status response with real data from database
+            Map<String, Object> response = new HashMap<>();
+            response.put("operation_id", operationId);
+            response.put("routing_id", routingId);
+            response.put("name", operation.getName());
+            response.put("description", operation.getDescription());
+            
+            // Fetch real data from repositories
+            // Count active bins for this operation (bins currently at this operation)
+            List<?> activeBinsList = binRepository.findAll().stream()
+                .filter(bin -> bin.getCurrentOperationId() != null && 
+                        bin.getCurrentOperationId().equals(operationId) && 
+                        "ACTIVE".equals(bin.getStatus()))
+                .toList();
+            int activeBins = activeBinsList.size();
+            
+            // Get WIP tracking data for this operation
+            List<?> wipList = wipTrackingRepository.findAll().stream()
+                .filter(wip -> wip.getOperationId() != null && 
+                        wip.getOperationId().equals(operationId))
+                .toList();
+            
+            // WIP Quantity: trays currently in progress or pending at this operation
+            int wipQuantity = wipList.stream()
+                .filter(wip -> "IN_PROGRESS".equals(((com.cutm.smo.models.WipTracking)wip).getStatus()) || 
+                               "PENDING".equals(((com.cutm.smo.models.WipTracking)wip).getStatus()))
+                .mapToInt(wip -> ((com.cutm.smo.models.WipTracking)wip).getQty() != null ? ((com.cutm.smo.models.WipTracking)wip).getQty() : 0)
+                .sum();
+            
+            // Completed Quantity: trays that have completed this operation
+            int completedQuantity = wipList.stream()
+                .filter(wip -> "COMPLETED".equals(((com.cutm.smo.models.WipTracking)wip).getStatus()))
+                .mapToInt(wip -> ((com.cutm.smo.models.WipTracking)wip).getQty() != null ? ((com.cutm.smo.models.WipTracking)wip).getQty() : 0)
+                .sum();
+            
+            // Count active operators (distinct operators working on this operation)
+            long activeOperators = wipList.stream()
+                .filter(wip -> "IN_PROGRESS".equals(((com.cutm.smo.models.WipTracking)wip).getStatus()))
+                .map(wip -> ((com.cutm.smo.models.WipTracking)wip).getOperatorId())
+                .distinct()
+                .count();
+            
+            // Determine operation status based on WIP data
+            // IN_PROGRESS if any bin is currently AT this operation (waiting to be tracked or being tracked),
+            // or if there are any pending/in-progress WIP records.
+            String status = "PENDING";
+            if (activeBins > 0 || wipQuantity > 0) {
+                status = "IN_PROGRESS";
+            } else if (completedQuantity > 0) {
+                status = "COMPLETED";
+            }
+            
+            // Get last action from bin assignment history for this routing
+            String lastAction = "None";
+            String lastActionTime = "N/A";
+            List<?> historyList = binAssignmentHistoryRepository.findAll().stream()
+                .filter(h -> h.getRoutingId() != null && h.getRoutingId().equals(routingId))
+                .sorted((a, b) -> {
+                    java.time.LocalDateTime timeA = ((com.cutm.smo.models.BinAssignmentHistory)a).getAssignmentStartTime();
+                    java.time.LocalDateTime timeB = ((com.cutm.smo.models.BinAssignmentHistory)b).getAssignmentStartTime();
+                    return timeB.compareTo(timeA);
+                })
+                .limit(1)
+                .toList();
+            
+            if (!historyList.isEmpty()) {
+                com.cutm.smo.models.BinAssignmentHistory lastHistory = (com.cutm.smo.models.BinAssignmentHistory) historyList.get(0);
+                lastAction = lastHistory.getNextOperation() != null ? lastHistory.getNextOperation() : "QR Assignment";
+                if (lastHistory.getAssignmentStartTime() != null) {
+                    lastActionTime = lastHistory.getAssignmentStartTime().toString();
+                }
+            }
+            
+            response.put("status", status);
+            response.put("active_bins", activeBins);
+            response.put("wip_quantity", wipQuantity);
+            response.put("completed_quantity", completedQuantity);
+            response.put("active_operators", (int) activeOperators);
+            response.put("last_action", lastAction);
+            response.put("last_action_time", lastActionTime);
+            response.put("estimated_time", operation.getStandardTime() != null ? operation.getStandardTime() + " min" : "N/A");
+            
+            // Get NEXT operation from routing edges (following graph, not sequential)
+            String nextOperation = "N/A";
+            Long nextOperationId = null;
+            if (plan.getEdges() != null) {
+                for (WorkflowEdge edge : plan.getEdges()) {
+                    if (edge.getFromOperationId().equals(operationId)) {
+                        nextOperation = edge.getToName();
+                        nextOperationId = edge.getToOperationId();
+                        log.debug("Found next operation via edge: {} -> {}", operation.getName(), nextOperation);
+                        break;
+                    }
+                }
+            }
+            response.put("next_operation", nextOperation);
+            response.put("next_operation_id", nextOperationId);
+            
+            log.info("Operation status retrieved - Operation: {}, Status: {}, Active Bins: {}, WIP Qty: {}, Completed: {}, Next Op: {}", 
+                operation.getName(), status, activeBins, wipQuantity, completedQuantity, nextOperation);
+            
+            long endTime = System.currentTimeMillis();
+            LoggingUtil.logPerformance(log, "Get Operation Status", startTime, endTime);
+            log.info("=== GET OPERATION STATUS END - SUCCESS ===");
+            return response;
+        } catch (Exception e) {
+            long endTime = System.currentTimeMillis();
+            LoggingUtil.logError(log, "Failed to get operation status for routing: " + routingId + ", operation: " + operationId, e);
+            LoggingUtil.logPerformance(log, "Get Operation Status (Failed)", startTime, endTime);
+            throw e;
+        }
     }
 }
