@@ -237,8 +237,8 @@ public class EnhancedMergingService {
         TempBinMerge savedTempMerge = tempBinMergeRepository.save(tempMerge);
 
         // Step 2: Update target bin quantity
+        // Keep target bin ACTIVE so it can continue tracking or be merged with more bins
         targetBin.setQty(totalQty);
-        targetBin.setStatus("MERGED"); // Update status to indicate it's been merged
         binRepository.save(targetBin);
 
         // Step 3: Reset source bin to FREE state for reuse
