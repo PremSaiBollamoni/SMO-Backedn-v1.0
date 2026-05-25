@@ -2,8 +2,12 @@ package com.cutm.smo.services;
 
 import com.cutm.smo.models.Bin;
 import com.cutm.smo.models.RoutingStep;
+import com.cutm.smo.models.RoutingEdge;
+import com.cutm.smo.models.Order;
 import com.cutm.smo.repositories.BinRepository;
 import com.cutm.smo.repositories.RoutingStepRepository;
+import com.cutm.smo.repositories.RoutingEdgeRepository;
+import com.cutm.smo.repository.OrderRepository;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -26,13 +30,29 @@ public class RoutingProgressionService {
     @Autowired
     private BinRepository binRepository;
 
+    @Autowired
+    private RoutingEdgeRepository routingEdgeRepository;
+
+    @Autowired
+    private OrderRepository orderRepository;
+
     /**
      * Get the next operation in routing sequence after the given operation
+     * Uses routing_edge table for parallel paths with merges
      * @param routingId The routing ID
      * @param currentOperationId The current operation ID
      * @return Next operation ID, or null if this is the last operation
      */
     public Long getNextOperationInSequence(Long routingId, Long currentOperationId) {
+        // Try to find edge from current operation
+        List<RoutingEdge> edges = routingEdgeRepository.findByRoutingIdAndFromOperationId(routingId, currentOperationId);
+        
+        if (!edges.isEmpty()) {
+            // Use first edge found (in case of multiple outgoing edges, take first)
+            return edges.get(0).getToOperationId();
+        }
+        
+        // Fallback to linear sequence if no edges found
         List<RoutingStep> steps = routingStepRepository.findByRoutingIdOrderByRoutingStepIdAsc(routingId);
         
         if (steps.isEmpty()) {
@@ -132,6 +152,13 @@ public class RoutingProgressionService {
             result.put("workflowComplete", true);
             result.put("message", "Workflow completed - all operations finished");
             result.put("completedAt", bin.getCompletedAt());
+
+            // Save bin first so the new COMPLETED status is included in the order roll-up
+            binRepository.save(bin);
+
+            // Update linked order's status if total completed qty across all bins
+            // for that order has reached the order's target qty.
+            updateOrderStatusIfComplete(bin.getOrderId(), result);
         } else {
             // Get next operation
             Long nextOperationId = getNextOperationInSequence(bin.getCurrentRoutingId(), completedOperationId);
@@ -169,7 +196,6 @@ public class RoutingProgressionService {
      * @param routingId The routing ID
      * @return First operation ID
      */
-    @Transactional
     public Long initializeRoutingProgression(Long binId, Long routingId) {
         Optional<Bin> binOpt = binRepository.findById(binId);
         if (!binOpt.isPresent()) {
@@ -283,5 +309,61 @@ public class RoutingProgressionService {
         result.put("valid", true);
         result.put("message", "Operation can be completed");
         return result;
+    }
+
+    /**
+     * Update order status to COMPLETED if total completed qty across all bins
+     * linked to this order has reached or exceeded the order's target qty.
+     * No-op if orderId is null or order not found.
+     */
+    private void updateOrderStatusIfComplete(Long orderId, Map<String, Object> result) {
+        if (orderId == null) {
+            return;
+        }
+
+        Optional<Order> orderOpt = orderRepository.findById(orderId);
+        if (!orderOpt.isPresent()) {
+            return;
+        }
+
+        Order order = orderOpt.get();
+
+        // If already in a terminal state, skip
+        if ("COMPLETED".equalsIgnoreCase(order.getStatus()) ||
+            "CANCELLED".equalsIgnoreCase(order.getStatus())) {
+            return;
+        }
+
+        // Sum completed qty across all bins linked to this order
+        List<Bin> orderBins = binRepository.findByOrderId(orderId);
+        int completedQty = 0;
+        for (Bin b : orderBins) {
+            if ("COMPLETED".equalsIgnoreCase(b.getStatus()) && b.getQty() != null) {
+                completedQty += b.getQty();
+            }
+        }
+
+        Integer orderQty = order.getOrderQty();
+        result.put("orderId", orderId);
+        result.put("orderCompletedQty", completedQty);
+        result.put("orderTargetQty", orderQty);
+
+        if (orderQty != null && completedQty >= orderQty) {
+            order.setStatus("COMPLETED");
+            orderRepository.save(order);
+            result.put("orderStatusChanged", true);
+            result.put("orderStatus", "COMPLETED");
+        } else {
+            // Move to IN_PROGRESS once any qty has been completed (and not yet there)
+            if (completedQty > 0 && !"IN_PROGRESS".equalsIgnoreCase(order.getStatus())) {
+                order.setStatus("IN_PROGRESS");
+                orderRepository.save(order);
+                result.put("orderStatusChanged", true);
+                result.put("orderStatus", "IN_PROGRESS");
+            } else {
+                result.put("orderStatusChanged", false);
+                result.put("orderStatus", order.getStatus());
+            }
+        }
     }
 }
