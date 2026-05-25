@@ -660,6 +660,10 @@ public class ProcessPlanService {
         log.debug("[approveProcessPlan] After save - Routing: ID={}, Status={}, ApprovalStatus={}", 
                 savedRouting.getRoutingId(), savedRouting.getStatus(), savedRouting.getApprovalStatus());
 
+        // Auto-generate edges from routing steps
+        log.debug("[approveProcessPlan] Auto-generating edges from routing steps");
+        autoGenerateEdges(routingId);
+
         log.info("[approveProcessPlan] Process plan approved successfully. Routing ID: {}, Approved by: {}", routingId, approvedBy);
         log.debug("[approveProcessPlan] === END APPROVAL PROCESS ===");
         
@@ -846,5 +850,53 @@ public class ProcessPlanService {
         opResp.setStageGroup(op.getStageGroup());
         opResp.setStandardTime(op.getStandardTime());
         return opResp;
+    }
+
+    /**
+     * Auto-generate edges from routing steps when process plan is approved
+     * ONLY if no explicit edges were already provided by the frontend
+     */
+    @Transactional
+    private void autoGenerateEdges(Long routingId) {
+        log.info("[autoGenerateEdges] === START AUTO-GENERATING EDGES FOR ROUTING {} ===", routingId);
+        
+        // Check if edges already exist (frontend provided explicit edges)
+        List<RoutingEdge> existingEdges = routingEdgeRepository.findByRoutingIdOrderByEdgeIdAsc(routingId);
+        if (!existingEdges.isEmpty()) {
+            log.info("[autoGenerateEdges] ✓ EDGES ALREADY EXIST ({} edges) - SKIPPING AUTO-GENERATION", existingEdges.size());
+            log.info("[autoGenerateEdges] === END AUTO-GENERATING EDGES (SKIPPED) ===");
+            return;
+        }
+        
+        List<RoutingStep> steps = routingStepRepository.findByRoutingIdOrderByRoutingStepIdAsc(routingId);
+        if (steps.isEmpty()) {
+            log.warn("[autoGenerateEdges] No routing steps found for routing {}", routingId);
+            return;
+        }
+
+        Set<Long> operationIds = steps.stream().map(RoutingStep::getOperationId).collect(Collectors.toSet());
+        Map<Long, Operation> operationById = operationRepository.findAllById(operationIds).stream()
+                .collect(Collectors.toMap(Operation::getOperationId, o -> o));
+
+        // Build edges from routing steps (only if no explicit edges exist)
+        List<WorkflowEdge> edges = buildExplicitEdges(steps, operationById);
+        
+        // Store edges in routing_edge table
+        Long nextEdgeId = routingEdgeRepository.findMaxEdgeId() + 1;
+        for (WorkflowEdge edge : edges) {
+            RoutingEdge routingEdge = new RoutingEdge();
+            routingEdge.setEdgeId(nextEdgeId++);
+            routingEdge.setRoutingId(routingId);
+            routingEdge.setFromOperationId(edge.getFromOperationId());
+            routingEdge.setToOperationId(edge.getToOperationId());
+            routingEdge.setFromName(edge.getFromName());
+            routingEdge.setToName(edge.getToName());
+            routingEdge.setEdgeType(edge.getEdgeType());
+            routingEdgeRepository.save(routingEdge);
+            log.debug("[autoGenerateEdges] ✓ EDGE STORED: {} -> {} ({})", 
+                    edge.getFromName(), edge.getToName(), edge.getEdgeType());
+        }
+        
+        log.info("[autoGenerateEdges] === AUTO-GENERATED {} EDGES FOR ROUTING {} ===", edges.size(), routingId);
     }
 }
