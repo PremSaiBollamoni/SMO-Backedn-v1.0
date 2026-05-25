@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: smo-backend
+    env: docker
+    dockerfilePath: Dockerfile
+    dockerContext: .
+    ports:
+      - 8080
+    envVars:
+      - key: DB_URL
+        sync: false
+      - key: DB_USERNAME
+        sync: false
+      - key: DB_PASSWORD
+        sync: false
