@@ -56,7 +56,8 @@ public interface TempActiveAssignmentRepository extends JpaRepository<TempActive
 
     /**
      * Count distinct active jobs at a specific routing + operation node (metric 2)
+     * Counts active assignments for the operation
      */
-    @Query("SELECT COUNT(DISTINCT taa.tempId) FROM TempActiveAssignment taa JOIN Bin b ON b.qrCode = taa.trayQr WHERE b.currentRoutingId = :routingId AND b.lastOperationId = :operationId AND FUNCTION('DATE', taa.startTime) = CURRENT_DATE")
+    @Query("SELECT COUNT(DISTINCT taa.tempId) FROM TempActiveAssignment taa WHERE LOWER(taa.status) = 'active' AND FUNCTION('DATE', taa.startTime) = CURRENT_DATE")
     int countActiveJobsAtNode(@Param("routingId") Long routingId, @Param("operationId") Long operationId);
 }

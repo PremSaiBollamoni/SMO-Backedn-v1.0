@@ -230,29 +230,43 @@ public class EnhancedQrAssignmentService {
     private Long findStyleVariantId(QrAssignmentRequest request) {
         List<StyleVariant> variants = styleVariantRepository.findAll();
         
-        for (StyleVariant variant : variants) {
-            boolean matches = true;
-            
-            // Match size if provided
-            if (request.getSize() != null && !request.getSize().trim().isEmpty()) {
-                if (variant.getSize() == null || !variant.getSize().equalsIgnoreCase(request.getSize())) {
-                    matches = false;
-                }
-            }
-            
-            // Match GTG number if provided
-            if (request.getGtgNumber() != null && !request.getGtgNumber().trim().isEmpty()) {
-                if (variant.getGtgId() == null || !variant.getGtgId().equalsIgnoreCase(request.getGtgNumber())) {
-                    matches = false;
-                }
-            }
-            
-            if (matches) {
-                return variant.getStyleVariantId();
-            }
+        // If no variants exist, return null
+        if (variants.isEmpty()) {
+            return null;
         }
         
-        return null;
+        // If specific criteria provided, try to match
+        boolean hasCriteria = (request.getSize() != null && !request.getSize().trim().isEmpty()) ||
+                             (request.getGtgNumber() != null && !request.getGtgNumber().trim().isEmpty());
+        
+        if (hasCriteria) {
+            for (StyleVariant variant : variants) {
+                boolean matches = true;
+                
+                // Match size if provided
+                if (request.getSize() != null && !request.getSize().trim().isEmpty()) {
+                    if (variant.getSize() == null || !variant.getSize().equalsIgnoreCase(request.getSize())) {
+                        matches = false;
+                    }
+                }
+                
+                // Match GTG number if provided
+                if (request.getGtgNumber() != null && !request.getGtgNumber().trim().isEmpty()) {
+                    if (variant.getGtgId() == null || !variant.getGtgId().equalsIgnoreCase(request.getGtgNumber())) {
+                        matches = false;
+                    }
+                }
+                
+                if (matches) {
+                    return variant.getStyleVariantId();
+                }
+            }
+            // No matching variant found with provided criteria
+            return null;
+        } else {
+            // No criteria provided - return the first available variant as default
+            return variants.get(0).getStyleVariantId();
+        }
     }
 
     /**

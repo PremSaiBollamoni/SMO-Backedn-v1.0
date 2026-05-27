@@ -11,6 +11,7 @@ import com.cutm.smo.util.LoggingUtil;
 import com.cutm.smo.repositories.BinRepository;
 import com.cutm.smo.repositories.WipTrackingRepository;
 import com.cutm.smo.repositories.BinAssignmentHistoryRepository;
+import com.cutm.smo.repository.OrderRepository;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.server.ResponseStatusException;
 import org.springframework.http.HttpStatus;
@@ -32,15 +33,17 @@ public class ProcessPlanController {
     private final BinRepository binRepository;
     private final WipTrackingRepository wipTrackingRepository;
     private final BinAssignmentHistoryRepository binAssignmentHistoryRepository;
+    private final OrderRepository orderRepository;
 
     public ProcessPlanController(ProcessPlanService processPlanService, AccessControlService accessControlService, NodeMetricsService nodeMetricsService,
-            BinRepository binRepository, WipTrackingRepository wipTrackingRepository, BinAssignmentHistoryRepository binAssignmentHistoryRepository) {
+            BinRepository binRepository, WipTrackingRepository wipTrackingRepository, BinAssignmentHistoryRepository binAssignmentHistoryRepository, OrderRepository orderRepository) {
         this.processPlanService = processPlanService;
         this.accessControlService = accessControlService;
         this.nodeMetricsService = nodeMetricsService;
         this.binRepository = binRepository;
         this.wipTrackingRepository = wipTrackingRepository;
         this.binAssignmentHistoryRepository = binAssignmentHistoryRepository;
+        this.orderRepository = orderRepository;
     }
 
     @PostMapping("/draft")
@@ -404,11 +407,30 @@ public class ProcessPlanController {
                 .distinct()
                 .count();
             
-            // Determine operation status based on WIP data
-            // IN_PROGRESS if any bin is currently AT this operation (waiting to be tracked or being tracked),
-            // or if there are any pending/in-progress WIP records.
+            // Determine operation status based on WIP data and order status
+            // If the order is COMPLETED, all operations should be COMPLETED
             String status = "PENDING";
-            if (activeBins > 0 || wipQuantity > 0) {
+            
+            // Check if any bins for this routing have a completed order
+            List<?> binsForRouting = binRepository.findAll().stream()
+                .filter(bin -> bin.getCurrentRoutingId() != null && bin.getCurrentRoutingId().equals(routingId))
+                .toList();
+            
+            boolean orderCompleted = false;
+            if (!binsForRouting.isEmpty()) {
+                com.cutm.smo.models.Bin sampleBin = (com.cutm.smo.models.Bin) binsForRouting.get(0);
+                if (sampleBin.getOrderId() != null) {
+                    java.util.Optional<com.cutm.smo.models.Order> orderOpt = orderRepository.findById(sampleBin.getOrderId());
+                    if (orderOpt.isPresent() && "COMPLETED".equals(orderOpt.get().getStatus())) {
+                        orderCompleted = true;
+                    }
+                }
+            }
+            
+            // If order is completed, all operations are completed
+            if (orderCompleted) {
+                status = "COMPLETED";
+            } else if (activeBins > 0 || wipQuantity > 0) {
                 status = "IN_PROGRESS";
             } else if (completedQuantity > 0) {
                 status = "COMPLETED";

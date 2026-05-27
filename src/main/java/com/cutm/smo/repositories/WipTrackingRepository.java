@@ -17,7 +17,8 @@ public interface WipTrackingRepository extends JpaRepository<WipTracking, Long> 
 
     /**
      * Count completed jobs today at a specific routing + operation node (metric 3)
+     * Counts wiptracking records that are completed today at this operation
      */
-    @Query("SELECT COUNT(w) FROM WipTracking w JOIN Bin b ON b.binId = w.binId WHERE w.operationId = :operationId AND b.currentRoutingId = :routingId AND FUNCTION('DATE', w.endTime) = CURRENT_DATE AND w.status = 'completed'")
+    @Query("SELECT COUNT(w) FROM WipTracking w WHERE w.operationId = :operationId AND CAST(w.endTime AS DATE) = CAST(CURRENT_TIMESTAMP AS DATE) AND LOWER(w.status) = 'completed'")
     int countCompletedTodayAtNode(@Param("routingId") Long routingId, @Param("operationId") Long operationId);
 }

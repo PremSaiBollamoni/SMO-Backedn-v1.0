@@ -8,6 +8,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
+import java.time.temporal.ChronoUnit;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
@@ -108,6 +109,7 @@ public class EnhancedTrackingService {
         response.put("machineQr", request.getMachineQr());
         response.put("employeeQr", request.getEmployeeQr());
         response.put("trayQr", request.getTrayQr());
+        response.put("startTime", assignment.getStartTime() != null ? assignment.getStartTime().toString() : null);
 
         return response;
     }
@@ -164,6 +166,17 @@ public class EnhancedTrackingService {
         WipTracking wipTracking = createWipTrackingRecord(assignment, request, bin);
         wipTrackingRepository.save(wipTracking);
 
+        // IMPORTANT: Mark all previous wiptracking records for this assignment as COMPLETED
+        // This ensures that when an operation is completed, all related tracking records are marked as done
+        wipTrackingRepository.findAll().stream()
+            .filter(w -> w.getBinId() != null && w.getBinId().equals(bin.getBinId()))
+            .filter(w -> "PENDING".equalsIgnoreCase(w.getStatus()) || "ASSIGNED".equalsIgnoreCase(w.getStatus()))
+            .forEach(w -> {
+                w.setStatus("COMPLETED");
+                w.setEndTime(LocalDateTime.now());
+                wipTrackingRepository.save(w);
+            });
+
         // Log QR event for audit trail
         qrEventService.logQrEvent(
             assignment.getTrayQr(),
@@ -198,6 +211,17 @@ public class EnhancedTrackingService {
         response.put("machineQr", request.getMachineQr());
         response.put("employeeQr", request.getEmployeeQr());
         response.put("trayQr", request.getTrayQr());
+
+        // Duration tracking - time between 1st scan (assignment) and 2nd scan (completion)
+        LocalDateTime startTime = wipTracking.getStartTime();
+        LocalDateTime endTime = wipTracking.getEndTime();
+        if (startTime != null && endTime != null) {
+            long durationSeconds = ChronoUnit.SECONDS.between(startTime, endTime);
+            response.put("startTime", startTime.toString());
+            response.put("endTime", endTime.toString());
+            response.put("durationSeconds", durationSeconds);
+            response.put("durationFormatted", formatDuration(durationSeconds));
+        }
 
         // Add progression details
         if (progressionResult != null) {
@@ -268,5 +292,20 @@ public class EnhancedTrackingService {
         log.setNotes(notes);
 
         tempAssignmentLogRepository.save(log);
+    }
+
+    /**
+     * Format duration in seconds into a human-readable string (e.g., "1h 23m 45s")
+     */
+    private String formatDuration(long totalSeconds) {
+        if (totalSeconds < 0) return "0s";
+        long hours = totalSeconds / 3600;
+        long minutes = (totalSeconds % 3600) / 60;
+        long seconds = totalSeconds % 60;
+        StringBuilder sb = new StringBuilder();
+        if (hours > 0) sb.append(hours).append("h ");
+        if (minutes > 0 || hours > 0) sb.append(minutes).append("m ");
+        sb.append(seconds).append("s");
+        return sb.toString();
     }
 }

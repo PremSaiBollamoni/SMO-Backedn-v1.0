@@ -58,8 +58,10 @@ public interface BinRepository extends JpaRepository<Bin, Long> {
 
     /**
      * Count WIP bins at a specific routing + operation node (metric 1)
+     * Counts wiptracking records at this operation (IN_PROGRESS, PENDING, or COMPLETED today)
+     * Gets routing_id from the wiptracking records themselves
      */
-    @Query("SELECT COUNT(b) FROM Bin b WHERE b.currentRoutingId = :routingId AND b.lastOperationId = :operationId AND b.currentStatus IN ('assigned', 'in_progress')")
+    @Query("SELECT COUNT(DISTINCT w.binId) FROM WipTracking w WHERE w.operationId = :operationId AND (LOWER(w.status) = 'in_progress' OR LOWER(w.status) = 'pending' OR (LOWER(w.status) = 'completed' AND CAST(w.endTime AS DATE) = CAST(CURRENT_TIMESTAMP AS DATE)))")
     int countWipAtNode(@Param("routingId") Long routingId, @Param("operationId") Long operationId);
     
     /**
