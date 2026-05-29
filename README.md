@@ -161,6 +161,27 @@ SMO Backend is a robust, scalable Spring Boot application that powers a comprehe
 - Active/Inactive status management
 - Dropdown population for dependent entities (GTG uses Styles, Buttons, Threads)
 
+#### 14. **Edit Routing — In-Place Process Plan Editor** ⭐ NEW
+Lets a planner reshape an APPROVED routing's flow graph without recreating it.
+All operations are wrapped in a single `@Transactional` so the routing is never
+left in an inconsistent state, and updated process-plan responses use the same
+shape as `GET /api/processplan/{routingId}` so the UI re-renders with no
+special-casing.
+
+Operations supported:
+- **Insert operation** — split an existing edge or add a new parallel branch from an anchor (with optional merge target)
+- **Rename operation** — scoped to one routing only; the service clones the operation entity if it's shared with other routings so the rename never leaks outside the selected routing. `routing_edge.from_name`/`to_name` are kept in sync automatically.
+- **Delete operation** — removes the routing step plus all edges touching it. Auto-bridges every predecessor to every successor (skipping self-loops and duplicates) so the flow stays connected. The `operation` row itself is preserved.
+- **Reconnect edge** — redirects an existing `from → oldTo` edge to `from → newTo`, preserving the original edge type. Validates both endpoints belong to the routing and rejects duplicates.
+- **Move operation** — detaches the operation's edges (auto-bridging neighbors), then re-inserts the operation in three modes: split-edge / add-branch / terminal. Routing-step row is preserved, so no "already in routing" duplicate-check failures.
+- **Add edge** — creates a new connection between two existing operations in the same routing. Rejects duplicates.
+
+Each method validates that:
+- The routing exists
+- All referenced operations actually belong to the routing
+- The change won't create a self-loop or duplicate edge
+- Anchor operations have unambiguous neighbors when a branch isn't explicitly specified
+
 ---
 
 ## 🏛️ Architecture
@@ -407,6 +428,53 @@ GET    /api/gm/masterdata/threads/active      # Get active threads
 POST   /api/gm/masterdata/threads             # Create thread
 PUT    /api/gm/masterdata/threads/{id}        # Update thread
 DELETE /api/gm/masterdata/threads/{id}        # Delete thread
+```
+
+#### Edit Routing — In-Place Routing Modifications ⭐ NEW
+```http
+# Insert a new operation into a routing's flow graph (split an edge OR add a parallel branch)
+POST   /api/processplan/{routingId}/insert-operation
+Body: {
+  "mode": "SPLIT_EDGE" | "ADD_BRANCH",
+  "position": "AFTER" | "BEFORE",
+  "afterOperationId": Long,
+  "beforeOperationId": Long,
+  "mergeTargetOperationId": Long,
+  "useExisting": Boolean,
+  "existingOperationId": Long,
+  "name": String, "description": String,
+  "operationType": "SEQUENTIAL" | "PARALLEL_BRANCH" | "MERGE",
+  "stageGroup": Integer, "standardTime": Integer
+}
+
+# Rename an operation within a single routing only (auto-clones if shared with other routings)
+PUT    /api/processplan/{routingId}/rename-operation
+Body: { "operationId": Long, "newName": String, "newDescription": String }
+
+# Remove an operation from the routing's flow (auto-bridges predecessors to successors by default)
+DELETE /api/processplan/{routingId}/operations/{operationId}?autoBridge=true|false
+
+# Redirect an existing edge to a new target operation in the same routing
+POST   /api/processplan/{routingId}/reconnect
+Body: { "fromOperationId": Long, "oldToOperationId": Long, "newToOperationId": Long }
+
+# Move an existing operation: detach edges (auto-bridge), then re-insert at a new position
+POST   /api/processplan/{routingId}/move-operation
+Body: {
+  "operationId": Long,
+  "mode": "SPLIT_EDGE" | "ADD_BRANCH" | "TERMINAL",
+  "position": "AFTER" | "BEFORE",
+  "anchorOperationId": Long,
+  "otherEndOperationId": Long,
+  "mergeTargetOperationId": Long,
+  "skipAutoBridge": Boolean
+}
+
+# Add a new connection between two existing operations in the same routing
+POST   /api/processplan/{routingId}/add-edge
+Body: { "fromOperationId": Long, "toOperationId": Long, "edgeType": String }
+
+# All endpoints return the updated process plan (same shape as GET /{routingId})
 ```
 
 ### Response Format
