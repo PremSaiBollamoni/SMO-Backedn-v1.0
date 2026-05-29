@@ -21,9 +21,11 @@ import com.cutm.smo.dto.RoleDto;
 import com.cutm.smo.dto.UpdateHrProfileRequest;
 import com.cutm.smo.models.EmployeeInfo;
 import com.cutm.smo.models.EmployeeLogin;
+import com.cutm.smo.models.EmployeeRole;
 import com.cutm.smo.models.Role;
 import com.cutm.smo.repositories.EmployeeInfoRepository;
 import com.cutm.smo.repositories.EmployeeLoginRepository;
+import com.cutm.smo.repositories.EmployeeRoleRepository;
 import com.cutm.smo.repositories.RoleRepository;
 
 @Slf4j
@@ -36,16 +38,19 @@ public class HrService {
     private final EmployeeInfoRepository employeeInfoRepository;
     private final EmployeeLoginRepository employeeLoginRepository;
     private final SensitiveDataService sensitiveDataService;
+    private final EmployeeRoleRepository employeeRoleRepository;
 
     public HrService(
             RoleRepository roleRepository,
             EmployeeInfoRepository employeeInfoRepository,
             EmployeeLoginRepository employeeLoginRepository,
-            SensitiveDataService sensitiveDataService) {
+            SensitiveDataService sensitiveDataService,
+            EmployeeRoleRepository employeeRoleRepository) {
         this.roleRepository = roleRepository;
         this.employeeInfoRepository = employeeInfoRepository;
         this.employeeLoginRepository = employeeLoginRepository;
         this.sensitiveDataService = sensitiveDataService;
+        this.employeeRoleRepository = employeeRoleRepository;
     }
 
     public HrDashboardResponse getDashboard(String actorEmpId) {
@@ -328,13 +333,38 @@ public class HrService {
         if (role == null || !"ACTIVE".equalsIgnoreCase(role.getStatus())) {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Role is inactive");
         }
-        String activity = role.getActivity() == null ? "" : role.getActivity();
         String normalizedRequired = requiredActivity.trim().toUpperCase(Locale.ROOT);
+
+        // Check primary role first
+        String activity = role.getActivity() == null ? "" : role.getActivity();
         boolean allowed = activity.equalsIgnoreCase("ALL")
                 || activity.equalsIgnoreCase("ADMIN")
                 || java.util.Arrays.stream(activity.split(","))
                         .map(a -> a.trim().toUpperCase(Locale.ROOT))
                         .anyMatch(a -> a.equals(normalizedRequired));
+
+        // If primary role doesn't have the activity, check all assigned roles
+        // (supports multi-role employees who switched roles mid-session)
+        if (!allowed) {
+            java.util.List<com.cutm.smo.models.EmployeeRole> multiRoles =
+                    employeeRoleRepository.findByEmpId(actorId);
+            for (com.cutm.smo.models.EmployeeRole er : multiRoles) {
+                java.util.Optional<Role> extraRole = roleRepository.findById(er.getRoleId());
+                if (extraRole.isPresent() && "ACTIVE".equalsIgnoreCase(extraRole.get().getStatus())) {
+                    String extraActivity = extraRole.get().getActivity() == null ? "" : extraRole.get().getActivity();
+                    boolean extraAllowed = extraActivity.equalsIgnoreCase("ALL")
+                            || extraActivity.equalsIgnoreCase("ADMIN")
+                            || java.util.Arrays.stream(extraActivity.split(","))
+                                    .map(a -> a.trim().toUpperCase(Locale.ROOT))
+                                    .anyMatch(a -> a.equals(normalizedRequired));
+                    if (extraAllowed) {
+                        allowed = true;
+                        break;
+                    }
+                }
+            }
+        }
+
         if (!allowed) {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Access denied for activity " + requiredActivity);
         }
@@ -618,5 +648,86 @@ public class HrService {
             existing.setStatus(login.getStatus().trim().toUpperCase(Locale.ROOT));
         }
         return employeeLoginRepository.save(existing);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    //  Multi-role support (additive)
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /**
+     * Get all roles assigned to an employee from the employee_roles table.
+     * Returns a list of maps with roleId, roleName, activities, status.
+     */
+    public List<java.util.Map<String, Object>> getEmployeeRoles(Long empId) {
+        List<EmployeeRole> mappings = employeeRoleRepository.findByEmpId(empId);
+        List<java.util.Map<String, Object>> result = new java.util.ArrayList<>();
+        for (EmployeeRole mapping : mappings) {
+            roleRepository.findById(mapping.getRoleId()).ifPresent(role -> {
+                java.util.Map<String, Object> m = new java.util.HashMap<>();
+                m.put("roleId", role.getRoleId());
+                m.put("roleName", role.getRoleName());
+                m.put("activities", role.getActivity());
+                m.put("status", role.getStatus());
+                result.add(m);
+            });
+        }
+        return result;
+    }
+
+    /**
+     * Replace all roles for an employee.
+     * Also updates employee.role_id to the first role in the list (primary role).
+     */
+    @Transactional
+    public void setEmployeeRoles(Long empId, List<Long> roleIds) {
+        if (roleIds == null || roleIds.isEmpty()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "At least one role is required");
+        }
+        // Validate all role IDs exist
+        for (Long roleId : roleIds) {
+            if (!roleRepository.existsById(roleId)) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Role not found: " + roleId);
+            }
+        }
+        // Validate employee exists
+        EmployeeInfo emp = employeeInfoRepository.findById(empId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Employee not found"));
+
+        // Replace all mappings
+        employeeRoleRepository.deleteByEmpId(empId);
+        for (Long roleId : roleIds) {
+            EmployeeRole er = new EmployeeRole();
+            er.setEmpId(empId);
+            er.setRoleId(roleId);
+            employeeRoleRepository.save(er);
+        }
+
+        // Update primary role on employee to first in list
+        Role primaryRole = roleRepository.findById(roleIds.get(0)).orElse(null);
+        if (primaryRole != null) {
+            emp.setRole(primaryRole);
+            employeeInfoRepository.save(emp);
+        }
+        log.info("[setEmployeeRoles] Updated roles for empId={}: {}", empId, roleIds);
+    }
+
+    /**
+     * Get all roles for an employee as a combined activities string.
+     * Used by login to return merged activities when employee has multiple roles.
+     */
+    public String getMergedActivities(Long empId) {
+        List<EmployeeRole> mappings = employeeRoleRepository.findByEmpId(empId);
+        if (mappings.isEmpty()) return null;
+        java.util.Set<String> allActivities = new java.util.LinkedHashSet<>();
+        for (EmployeeRole mapping : mappings) {
+            roleRepository.findById(mapping.getRoleId()).ifPresent(role -> {
+                if (role.getActivity() != null && !role.getActivity().trim().isEmpty()) {
+                    for (String act : role.getActivity().split(",")) {
+                        allActivities.add(act.trim());
+                    }
+                }
+            });
+        }
+        return allActivities.isEmpty() ? null : String.join(",", allActivities);
     }
 }
