@@ -399,4 +399,37 @@ public class HrController {
             throw e;
         }
     }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    //  Multi-role endpoints (additive — no existing endpoints modified)
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /**
+     * GET /api/hr/employees/{empId}/roles
+     * Returns all roles assigned to an employee (from employee_roles table).
+     */
+    @GetMapping("/employees/{empId}/roles")
+    public List<java.util.Map<String, Object>> getEmployeeRoles(@PathVariable Long empId) {
+        return hrService.getEmployeeRoles(empId);
+    }
+
+    /**
+     * PUT /api/hr/employees/{empId}/roles
+     * Replaces all roles for an employee.
+     * Body: { "roleIds": [1, 2, 3] }
+     */
+    @PutMapping("/employees/{empId}/roles")
+    public java.util.Map<String, Object> setEmployeeRoles(
+            @PathVariable Long empId,
+            @RequestBody java.util.Map<String, Object> body) {
+        @SuppressWarnings("unchecked")
+        List<Integer> roleIds = (List<Integer>) body.get("roleIds");
+        if (roleIds == null) {
+            throw new org.springframework.web.server.ResponseStatusException(
+                    org.springframework.http.HttpStatus.BAD_REQUEST, "roleIds is required");
+        }
+        List<Long> ids = roleIds.stream().map(Integer::longValue).collect(java.util.stream.Collectors.toList());
+        hrService.setEmployeeRoles(empId, ids);
+        return java.util.Map.of("success", true, "message", "Roles updated successfully");
+    }
 }
