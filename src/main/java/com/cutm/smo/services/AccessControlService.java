@@ -11,21 +11,30 @@ import lombok.extern.slf4j.Slf4j;
 
 import com.cutm.smo.models.EmployeeInfo;
 import com.cutm.smo.models.EmployeeLogin;
+import com.cutm.smo.models.EmployeeRole;
 import com.cutm.smo.models.Role;
 import com.cutm.smo.repositories.EmployeeInfoRepository;
 import com.cutm.smo.repositories.EmployeeLoginRepository;
+import com.cutm.smo.repositories.EmployeeRoleRepository;
+import com.cutm.smo.repositories.RoleRepository;
 
 @Slf4j
 @Service
 public class AccessControlService {
     private final EmployeeInfoRepository employeeInfoRepository;
     private final EmployeeLoginRepository employeeLoginRepository;
+    private final EmployeeRoleRepository employeeRoleRepository;
+    private final RoleRepository roleRepository;
 
     public AccessControlService(
             EmployeeInfoRepository employeeInfoRepository,
-            EmployeeLoginRepository employeeLoginRepository) {
+            EmployeeLoginRepository employeeLoginRepository,
+            EmployeeRoleRepository employeeRoleRepository,
+            RoleRepository roleRepository) {
         this.employeeInfoRepository = employeeInfoRepository;
         this.employeeLoginRepository = employeeLoginRepository;
+        this.employeeRoleRepository = employeeRoleRepository;
+        this.roleRepository = roleRepository;
     }
 
     public Long require(String actorEmpId, String requiredActivity) {
@@ -77,6 +86,28 @@ public class AccessControlService {
                             .map(a -> a.trim().toUpperCase(Locale.ROOT))
                             .anyMatch(a -> a.equals(normalizedRequired));
             
+            // If primary role doesn't have the activity, check all assigned roles
+            // (supports multi-role employees who switched roles mid-session)
+            if (!allowed) {
+                java.util.List<EmployeeRole> multiRoles = employeeRoleRepository.findByEmpId(actorId);
+                for (EmployeeRole er : multiRoles) {
+                    java.util.Optional<Role> extraRole = roleRepository.findById(er.getRoleId());
+                    if (extraRole.isPresent() && "ACTIVE".equalsIgnoreCase(extraRole.get().getStatus())) {
+                        String extraActivity = extraRole.get().getActivity() == null ? "" : extraRole.get().getActivity();
+                        boolean extraAllowed = extraActivity.equalsIgnoreCase("ALL")
+                                || extraActivity.equalsIgnoreCase("ADMIN")
+                                || Arrays.stream(extraActivity.split(","))
+                                        .map(a -> a.trim().toUpperCase(Locale.ROOT))
+                                        .anyMatch(a -> a.equals(normalizedRequired));
+                        if (extraAllowed) {
+                            allowed = true;
+                            log.info("[AC] Access GRANTED via multi-role assignment (roleId={})", er.getRoleId());
+                            break;
+                        }
+                    }
+                }
+            }
+
             log.info("[AC] Permission check result: allowed={}", allowed);
             
             if (!allowed) {
