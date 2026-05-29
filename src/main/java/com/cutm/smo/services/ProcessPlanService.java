@@ -899,4 +899,947 @@ public class ProcessPlanService {
         
         log.info("[autoGenerateEdges] === AUTO-GENERATED {} EDGES FOR ROUTING {} ===", edges.size(), routingId);
     }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    //  EDIT-IN-PLACE FEATURE: Insert / Rename within a single routing
+    //  Additive only — does not modify any existing public method behavior.
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /**
+     * When an APPROVED routing is edited, reset it to UNDER_REVIEW so the GM
+     * must re-approve before it goes live again.
+     * DRAFT and other statuses are left unchanged.
+     * This is called at the start of every edit operation.
+     */
+    private void resetToUnderReviewIfApproved(Long routingId) {
+        routingRepository.findById(routingId).ifPresent(routing -> {
+            if (STATUS_APPROVED.equalsIgnoreCase(routing.getApprovalStatus()) ||
+                STATUS_APPROVED.equalsIgnoreCase(routing.getStatus())) {
+                routing.setApprovalStatus(STATUS_UNDER_REVIEW);
+                routing.setStatus(STATUS_DRAFT);
+                routing.setApprovedBy(null);
+                routing.setApprovedAt(null);
+                routingRepository.save(routing);
+                log.info("[editRouting] Routing {} reset to UNDER_REVIEW for GM re-approval", routingId);
+            }
+        });
+    }
+
+    /**
+     * Insert a new operation into a routing's flow. Performs edge surgery so
+     * the new operation is properly wired into the graph.
+     *
+     * Linear case (anchor has exactly one outgoing edge):
+     *   AFTER mode:  before -> anchor -> next      becomes  before -> anchor -> NEW -> next
+     *   BEFORE mode: prev -> anchor -> after       becomes  prev -> NEW -> anchor -> after
+     *
+     * Specific edge case (when both afterOperationId and beforeOperationId are provided):
+     *   Splits exactly that one edge: A -> B  becomes  A -> NEW -> B
+     *
+     * @param routingId  target routing
+     * @param req        insert request (position, anchor, new op data)
+     * @return updated process plan (graph) for the routing
+     */
+    @Transactional
+    public ProcessPlanResponse insertOperationIntoRouting(Long routingId, com.cutm.smo.dto.InsertOperationRequest req) {
+        log.info("[insertOperation] === START INSERT OPERATION ROUTING={} ===", routingId);
+        if (routingId == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "routingId is required");
+        }
+        if (req == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Request body is required");
+        }
+
+        Routing routing = routingRepository.findById(routingId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Routing not found"));
+
+        String mode = req.getMode() == null ? "SPLIT_EDGE" : req.getMode().trim().toUpperCase();
+
+        if ("ADD_BRANCH".equals(mode)) {
+            resetToUnderReviewIfApproved(routingId);
+            return addParallelBranch(routingId, req);
+        }
+
+        // ── SPLIT_EDGE mode (default / backwards-compatible behavior) ──────────
+        Long anchorOpId;
+        Long targetFromOp;
+        Long targetToOp;
+
+        String position = req.getPosition() == null ? "" : req.getPosition().trim().toUpperCase();
+        if (req.getAfterOperationId() != null && req.getBeforeOperationId() != null) {
+            // Specific edge mode
+            targetFromOp = req.getAfterOperationId();
+            targetToOp = req.getBeforeOperationId();
+            anchorOpId = targetFromOp;
+        } else if ("AFTER".equals(position) && req.getAfterOperationId() != null) {
+            anchorOpId = req.getAfterOperationId();
+            // Find unique outgoing edge from anchor
+            List<RoutingEdge> outgoing = routingEdgeRepository.findByRoutingIdAndFromOperationId(routingId, anchorOpId);
+            if (outgoing.isEmpty()) {
+                // anchor is a terminal node — no edge to split, just append a new edge anchor -> NEW
+                targetFromOp = anchorOpId;
+                targetToOp = null;
+            } else if (outgoing.size() > 1) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                        "Anchor operation has multiple outgoing edges. Specify both afterOperationId and beforeOperationId to choose a specific edge.");
+            } else {
+                targetFromOp = anchorOpId;
+                targetToOp = outgoing.get(0).getToOperationId();
+            }
+        } else if ("BEFORE".equals(position) && req.getBeforeOperationId() != null) {
+            anchorOpId = req.getBeforeOperationId();
+            // Find unique incoming edge by scanning all edges in routing
+            List<RoutingEdge> allEdges = routingEdgeRepository.findByRoutingIdOrderByEdgeIdAsc(routingId);
+            List<RoutingEdge> incoming = allEdges.stream()
+                    .filter(e -> anchorOpId.equals(e.getToOperationId()))
+                    .collect(Collectors.toList());
+            if (incoming.isEmpty()) {
+                // anchor is a root node — no incoming edge, just prepend a new edge NEW -> anchor
+                targetFromOp = null;
+                targetToOp = anchorOpId;
+            } else if (incoming.size() > 1) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                        "Anchor operation has multiple incoming edges. Specify both afterOperationId and beforeOperationId to choose a specific edge.");
+            } else {
+                targetFromOp = incoming.get(0).getFromOperationId();
+                targetToOp = anchorOpId;
+            }
+        } else {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "Provide either (position=AFTER + afterOperationId), (position=BEFORE + beforeOperationId), or both afterOperationId and beforeOperationId.");
+        }
+
+        // Verify routing contains the anchor operation
+        List<RoutingStep> existingSteps = routingStepRepository.findByRoutingIdOrderByRoutingStepIdAsc(routingId);
+        boolean anchorInRouting = existingSteps.stream().anyMatch(s -> anchorOpId.equals(s.getOperationId()));
+        if (!anchorInRouting) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "Anchor operation is not part of the selected routing");
+        }
+
+        // Reset to UNDER_REVIEW so GM must re-approve after this edit
+        resetToUnderReviewIfApproved(routingId);
+
+        // Resolve / create the new operation
+        Operation newOperation = resolveOrCreateOperation(req, existingSteps);
+
+        // Insert routing step linking new operation to the routing
+        RoutingStep newStep = new RoutingStep();
+        newStep.setRoutingStepId(routingStepRepository.findMaxRoutingStepId() + 1);
+        newStep.setRoutingId(routingId);
+        newStep.setOperationId(newOperation.getOperationId());
+        newStep.setStageGroup(newOperation.getStageGroup() == null ? 1 : newOperation.getStageGroup());
+        routingStepRepository.save(newStep);
+
+        // Edge surgery
+        Long nextEdgeId = routingEdgeRepository.findMaxEdgeId() + 1;
+
+        if (targetFromOp != null && targetToOp != null) {
+            // Split the edge from -> to into  from -> NEW -> to
+            // Find existing edge to remove
+            List<RoutingEdge> outgoing = routingEdgeRepository.findByRoutingIdAndFromOperationId(routingId, targetFromOp);
+            RoutingEdge edgeToRemove = null;
+            for (RoutingEdge e : outgoing) {
+                if (targetToOp.equals(e.getToOperationId())) {
+                    edgeToRemove = e;
+                    break;
+                }
+            }
+            String preservedType = edgeToRemove == null ? "sequential" : edgeToRemove.getEdgeType();
+            if (edgeToRemove != null) {
+                routingEdgeRepository.delete(edgeToRemove);
+            }
+
+            Operation fromOp = operationRepository.findById(targetFromOp).orElse(null);
+            Operation toOp = operationRepository.findById(targetToOp).orElse(null);
+
+            RoutingEdge edge1 = new RoutingEdge();
+            edge1.setEdgeId(nextEdgeId++);
+            edge1.setRoutingId(routingId);
+            edge1.setFromOperationId(targetFromOp);
+            edge1.setToOperationId(newOperation.getOperationId());
+            edge1.setFromName(fromOp == null ? "" : fromOp.getName());
+            edge1.setToName(newOperation.getName());
+            edge1.setEdgeType(preservedType);
+            routingEdgeRepository.save(edge1);
+
+            RoutingEdge edge2 = new RoutingEdge();
+            edge2.setEdgeId(nextEdgeId);
+            edge2.setRoutingId(routingId);
+            edge2.setFromOperationId(newOperation.getOperationId());
+            edge2.setToOperationId(targetToOp);
+            edge2.setFromName(newOperation.getName());
+            edge2.setToName(toOp == null ? "" : toOp.getName());
+            edge2.setEdgeType(preservedType);
+            routingEdgeRepository.save(edge2);
+
+            log.info("[insertOperation] ✓ SPLIT EDGE: {} -> {} into {} -> {} -> {}",
+                    targetFromOp, targetToOp, targetFromOp, newOperation.getOperationId(), targetToOp);
+        } else if (targetFromOp != null) {
+            // Append: anchor -> NEW
+            Operation fromOp = operationRepository.findById(targetFromOp).orElse(null);
+            RoutingEdge edge = new RoutingEdge();
+            edge.setEdgeId(nextEdgeId);
+            edge.setRoutingId(routingId);
+            edge.setFromOperationId(targetFromOp);
+            edge.setToOperationId(newOperation.getOperationId());
+            edge.setFromName(fromOp == null ? "" : fromOp.getName());
+            edge.setToName(newOperation.getName());
+            edge.setEdgeType("sequential");
+            routingEdgeRepository.save(edge);
+            log.info("[insertOperation] ✓ APPENDED: {} -> {}", targetFromOp, newOperation.getOperationId());
+        } else if (targetToOp != null) {
+            // Prepend: NEW -> anchor
+            Operation toOp = operationRepository.findById(targetToOp).orElse(null);
+            RoutingEdge edge = new RoutingEdge();
+            edge.setEdgeId(nextEdgeId);
+            edge.setRoutingId(routingId);
+            edge.setFromOperationId(newOperation.getOperationId());
+            edge.setToOperationId(targetToOp);
+            edge.setFromName(newOperation.getName());
+            edge.setToName(toOp == null ? "" : toOp.getName());
+            edge.setEdgeType("sequential");
+            routingEdgeRepository.save(edge);
+            log.info("[insertOperation] ✓ PREPENDED: {} -> {}", newOperation.getOperationId(), targetToOp);
+        }
+
+        log.info("[insertOperation] === END INSERT OPERATION ===");
+        return getProcessPlan(routingId);
+    }
+
+    /**
+     * ADD_BRANCH mode: add the new operation as a new parallel branch from
+     * the anchor. No existing edges are removed. Optionally connects the new
+     * operation to a merge target.
+     */
+    @Transactional
+    private ProcessPlanResponse addParallelBranch(Long routingId, com.cutm.smo.dto.InsertOperationRequest req) {
+        log.info("[insertOperation/ADD_BRANCH] routing={}, anchor={}, mergeTarget={}",
+                routingId, req.getAfterOperationId(), req.getMergeTargetOperationId());
+
+        if (req.getAfterOperationId() == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "afterOperationId is required when mode=ADD_BRANCH (it's the source of the new branch)");
+        }
+        Long anchorId = req.getAfterOperationId();
+
+        // Confirm anchor is in the routing
+        List<RoutingStep> existingSteps = routingStepRepository.findByRoutingIdOrderByRoutingStepIdAsc(routingId);
+        boolean anchorInRouting = existingSteps.stream().anyMatch(s -> anchorId.equals(s.getOperationId()));
+        if (!anchorInRouting) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Anchor operation is not part of the selected routing");
+        }
+
+        // Confirm merge target (if provided) is in the routing
+        Long mergeTargetId = req.getMergeTargetOperationId();
+        if (mergeTargetId != null) {
+            boolean targetInRouting = existingSteps.stream().anyMatch(s -> mergeTargetId.equals(s.getOperationId()));
+            if (!targetInRouting) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Merge target is not part of the selected routing");
+            }
+            if (mergeTargetId.equals(anchorId)) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Merge target cannot be the same as the anchor");
+            }
+        }
+
+        // Resolve / create the new operation (same logic as split-edge mode)
+        Operation newOperation = resolveOrCreateOperation(req, existingSteps);
+
+        // Add routing step linking new op to this routing
+        RoutingStep newStep = new RoutingStep();
+        newStep.setRoutingStepId(routingStepRepository.findMaxRoutingStepId() + 1);
+        newStep.setRoutingId(routingId);
+        newStep.setOperationId(newOperation.getOperationId());
+        newStep.setStageGroup(newOperation.getStageGroup() == null ? 1 : newOperation.getStageGroup());
+        routingStepRepository.save(newStep);
+
+        // Add edge anchor -> NEW (additive, never removes existing edges)
+        Long nextEdgeId = routingEdgeRepository.findMaxEdgeId() + 1;
+        Operation anchorOp = operationRepository.findById(anchorId).orElse(null);
+        RoutingEdge edge1 = new RoutingEdge();
+        edge1.setEdgeId(nextEdgeId++);
+        edge1.setRoutingId(routingId);
+        edge1.setFromOperationId(anchorId);
+        edge1.setToOperationId(newOperation.getOperationId());
+        edge1.setFromName(anchorOp == null ? "" : anchorOp.getName());
+        edge1.setToName(newOperation.getName());
+        edge1.setEdgeType("parallel");
+        routingEdgeRepository.save(edge1);
+        log.info("[insertOperation/ADD_BRANCH] ✓ NEW BRANCH EDGE: {} -> {}", anchorId, newOperation.getOperationId());
+
+        // Optionally connect NEW -> mergeTarget
+        if (mergeTargetId != null) {
+            Operation mergeOp = operationRepository.findById(mergeTargetId).orElse(null);
+            RoutingEdge edge2 = new RoutingEdge();
+            edge2.setEdgeId(nextEdgeId);
+            edge2.setRoutingId(routingId);
+            edge2.setFromOperationId(newOperation.getOperationId());
+            edge2.setToOperationId(mergeTargetId);
+            edge2.setFromName(newOperation.getName());
+            edge2.setToName(mergeOp == null ? "" : mergeOp.getName());
+            edge2.setEdgeType("parallel");
+            routingEdgeRepository.save(edge2);
+            log.info("[insertOperation/ADD_BRANCH] ✓ MERGE EDGE: {} -> {}", newOperation.getOperationId(), mergeTargetId);
+        }
+
+        log.info("[insertOperation/ADD_BRANCH] === END ===");
+        return getProcessPlan(routingId);
+    }
+
+    /**
+     * Shared helper used by both SPLIT_EDGE and ADD_BRANCH paths.
+     * Either looks up an existing operation or creates a new one.
+     */
+    private Operation resolveOrCreateOperation(com.cutm.smo.dto.InsertOperationRequest req, List<RoutingStep> existingSteps) {
+        if (req.isUseExisting()) {
+            if (req.getExistingOperationId() == null) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "existingOperationId is required when useExisting=true");
+            }
+            Operation op = operationRepository.findById(req.getExistingOperationId())
+                    .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "Existing operation not found"));
+            final Long checkOpId = op.getOperationId();
+            boolean alreadyInRouting = existingSteps.stream().anyMatch(s -> checkOpId.equals(s.getOperationId()));
+            if (alreadyInRouting) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "This operation is already part of the routing");
+            }
+            return op;
+        }
+        if (req.getName() == null || req.getName().trim().isEmpty()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "name is required when creating a new operation");
+        }
+        Operation newOp = new Operation();
+        newOp.setOperationId(operationRepository.findMaxOperationId() + 1);
+        newOp.setName(req.getName().trim());
+        newOp.setDescription(req.getDescription() == null ? "" : req.getDescription().trim());
+        newOp.setSequence(req.getSequence() == null ? 0 : req.getSequence());
+        try {
+            newOp.setOperationType(req.getOperationType() == null
+                    ? OperationType.SEQUENTIAL
+                    : OperationType.valueOf(req.getOperationType().trim().toUpperCase()));
+        } catch (IllegalArgumentException ex) {
+            newOp.setOperationType(OperationType.SEQUENTIAL);
+        }
+        newOp.setStageGroup(req.getStageGroup() == null ? 1 : req.getStageGroup());
+        newOp.setStandardTime(req.getStandardTime() == null ? 0 : req.getStandardTime());
+        return operationRepository.save(newOp);
+    }
+
+    /**
+     * Rename an operation within a SPECIFIC routing only.
+     *
+     * Strategy: if the operation is shared with any other routing's steps,
+     * clone the operation first (new operation_id), update this routing's
+     * step + edges to point at the clone, and rename the clone. This way the
+     * rename never bleeds into other routings.
+     *
+     * @return updated process plan (graph) for the routing
+     */
+    @Transactional
+    public ProcessPlanResponse renameOperationInRouting(Long routingId, com.cutm.smo.dto.RenameOperationRequest req) {
+        log.info("[renameOperation] === START RENAME ROUTING={} OP={} ===", routingId, req == null ? null : req.getOperationId());
+        if (routingId == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "routingId is required");
+        }
+        if (req == null || req.getOperationId() == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "operationId is required");
+        }
+        if (req.getNewName() == null || req.getNewName().trim().isEmpty()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "newName is required");
+        }
+
+        routingRepository.findById(routingId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Routing not found"));
+
+        Operation operation = operationRepository.findById(req.getOperationId())
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "Operation not found"));
+
+        // Verify this operation is referenced by the selected routing
+        List<RoutingStep> stepsInRouting = routingStepRepository.findByRoutingIdOrderByRoutingStepIdAsc(routingId);
+        RoutingStep targetStep = stepsInRouting.stream()
+                .filter(s -> req.getOperationId().equals(s.getOperationId()))
+                .findFirst()
+                .orElse(null);
+        if (targetStep == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "Operation is not part of the selected routing");
+        }
+
+        // Reset to UNDER_REVIEW so GM must re-approve after this edit
+        resetToUnderReviewIfApproved(routingId);
+
+        // Detect if shared with other routings
+        List<RoutingStep> stepsAcrossAllRoutings = routingStepRepository.findAll();
+        boolean sharedWithOthers = stepsAcrossAllRoutings.stream()
+                .anyMatch(s -> req.getOperationId().equals(s.getOperationId())
+                        && !routingId.equals(s.getRoutingId()));
+
+        Operation toRename;
+        if (sharedWithOthers) {
+            // Clone operation, then redirect this routing's step + edges to clone
+            Operation clone = new Operation();
+            clone.setOperationId(operationRepository.findMaxOperationId() + 1);
+            clone.setName(operation.getName());
+            clone.setDescription(operation.getDescription());
+            clone.setSequence(operation.getSequence());
+            clone.setOperationType(operation.getOperationType());
+            clone.setStageGroup(operation.getStageGroup());
+            clone.setStandardTime(operation.getStandardTime());
+            clone = operationRepository.save(clone);
+
+            // Repoint routing step to clone
+            targetStep.setOperationId(clone.getOperationId());
+            routingStepRepository.save(targetStep);
+
+            // Repoint any edges referencing the original op within this routing only
+            List<RoutingEdge> edges = routingEdgeRepository.findByRoutingIdOrderByEdgeIdAsc(routingId);
+            for (RoutingEdge e : edges) {
+                boolean changed = false;
+                if (req.getOperationId().equals(e.getFromOperationId())) {
+                    e.setFromOperationId(clone.getOperationId());
+                    changed = true;
+                }
+                if (req.getOperationId().equals(e.getToOperationId())) {
+                    e.setToOperationId(clone.getOperationId());
+                    changed = true;
+                }
+                if (changed) {
+                    routingEdgeRepository.save(e);
+                }
+            }
+
+            toRename = clone;
+            log.info("[renameOperation] Cloned shared operation {} -> {} for routing {}",
+                    operation.getOperationId(), clone.getOperationId(), routingId);
+        } else {
+            toRename = operation;
+        }
+
+        // Apply rename
+        toRename.setName(req.getNewName().trim());
+        if (req.getNewDescription() != null) {
+            toRename.setDescription(req.getNewDescription().trim());
+        }
+        operationRepository.save(toRename);
+
+        // Sync cached names in routing_edge for this routing
+        List<RoutingEdge> edgesAfter = routingEdgeRepository.findByRoutingIdOrderByEdgeIdAsc(routingId);
+        for (RoutingEdge e : edgesAfter) {
+            boolean changed = false;
+            if (toRename.getOperationId().equals(e.getFromOperationId())
+                    && !toRename.getName().equals(e.getFromName())) {
+                e.setFromName(toRename.getName());
+                changed = true;
+            }
+            if (toRename.getOperationId().equals(e.getToOperationId())
+                    && !toRename.getName().equals(e.getToName())) {
+                e.setToName(toRename.getName());
+                changed = true;
+            }
+            if (changed) {
+                routingEdgeRepository.save(e);
+            }
+        }
+
+        log.info("[renameOperation] === END RENAME ===");
+        return getProcessPlan(routingId);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    //  DELETE / RECONNECT / MOVE
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /**
+     * Remove an operation from a routing's flow and (by default) auto-bridge
+     * its predecessors to its successors so the flow stays connected.
+     *
+     * Behavior:
+     *   - Removes the routing step linking this operation to the routing.
+     *   - Removes all edges in this routing that touch the operation.
+     *   - If autoBridge=true (default), creates fresh edges from each
+     *     predecessor to each successor (cartesian product, deduped).
+     *   - The operation itself is NOT deleted from the operation table —
+     *     other routings may still reference it.
+     */
+    @Transactional
+    public ProcessPlanResponse removeOperationFromRouting(Long routingId, Long operationId, boolean autoBridge) {
+        log.info("[deleteOperation] === START routingId={}, opId={}, autoBridge={} ===",
+                routingId, operationId, autoBridge);
+
+        if (routingId == null || operationId == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "routingId and operationId are required");
+        }
+
+        routingRepository.findById(routingId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Routing not found"));
+
+        // Verify operation belongs to this routing
+        List<RoutingStep> stepsInRouting = routingStepRepository.findByRoutingIdOrderByRoutingStepIdAsc(routingId);
+        RoutingStep step = stepsInRouting.stream()
+                .filter(s -> operationId.equals(s.getOperationId()))
+                .findFirst()
+                .orElse(null);
+        if (step == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Operation is not part of the selected routing");
+        }
+
+        // Reset to UNDER_REVIEW so GM must re-approve after this edit
+        resetToUnderReviewIfApproved(routingId);
+
+        // Find all edges in this routing
+        List<RoutingEdge> allEdges = routingEdgeRepository.findByRoutingIdOrderByEdgeIdAsc(routingId);
+        List<Long> predecessors = new ArrayList<>();
+        List<Long> successors = new ArrayList<>();
+        List<RoutingEdge> toRemove = new ArrayList<>();
+
+        for (RoutingEdge e : allEdges) {
+            boolean touches = false;
+            if (operationId.equals(e.getToOperationId())) {
+                predecessors.add(e.getFromOperationId());
+                touches = true;
+            }
+            if (operationId.equals(e.getFromOperationId())) {
+                successors.add(e.getToOperationId());
+                touches = true;
+            }
+            if (touches) {
+                toRemove.add(e);
+            }
+        }
+
+        // Remove all edges touching this op
+        for (RoutingEdge e : toRemove) {
+            routingEdgeRepository.delete(e);
+        }
+        log.info("[deleteOperation] removed {} edges, predecessors={}, successors={}",
+                toRemove.size(), predecessors, successors);
+
+        // Auto-bridge predecessors -> successors
+        if (autoBridge && !predecessors.isEmpty() && !successors.isEmpty()) {
+            Long nextEdgeId = routingEdgeRepository.findMaxEdgeId() + 1;
+            // Operation lookup map for names
+            Map<Long, Operation> opMap = operationRepository.findAllById(
+                    java.util.stream.Stream.concat(predecessors.stream(), successors.stream())
+                            .distinct().collect(Collectors.toList())).stream()
+                    .collect(Collectors.toMap(Operation::getOperationId, o -> o));
+
+            // Existing edges set after deletes (rebuild)
+            Set<String> existingPairs = routingEdgeRepository.findByRoutingIdOrderByEdgeIdAsc(routingId).stream()
+                    .map(e -> e.getFromOperationId() + "->" + e.getToOperationId())
+                    .collect(Collectors.toSet());
+
+            for (Long p : predecessors) {
+                for (Long s : successors) {
+                    if (p.equals(s)) continue; // would be self-loop
+                    String key = p + "->" + s;
+                    if (existingPairs.contains(key)) continue;
+                    RoutingEdge bridge = new RoutingEdge();
+                    bridge.setEdgeId(nextEdgeId++);
+                    bridge.setRoutingId(routingId);
+                    bridge.setFromOperationId(p);
+                    bridge.setToOperationId(s);
+                    bridge.setFromName(opMap.get(p) != null ? opMap.get(p).getName() : "");
+                    bridge.setToName(opMap.get(s) != null ? opMap.get(s).getName() : "");
+                    bridge.setEdgeType("sequential");
+                    routingEdgeRepository.save(bridge);
+                    existingPairs.add(key);
+                    log.info("[deleteOperation] ✓ BRIDGE EDGE: {} -> {}", p, s);
+                }
+            }
+        }
+
+        // Remove the routing step
+        routingStepRepository.delete(step);
+
+        log.info("[deleteOperation] === END ===");
+        return getProcessPlan(routingId);
+    }
+
+    /**
+     * Redirect an existing edge to a new target operation in the same routing.
+     * Removes the old edge and creates a new one with the same edge_type.
+     */
+    @Transactional
+    public ProcessPlanResponse reconnectEdge(Long routingId, com.cutm.smo.dto.ReconnectEdgeRequest req) {
+        log.info("[reconnectEdge] === START routingId={}, from={}, oldTo={}, newTo={} ===",
+                routingId, req == null ? null : req.getFromOperationId(),
+                req == null ? null : req.getOldToOperationId(),
+                req == null ? null : req.getNewToOperationId());
+
+        if (req == null || req.getFromOperationId() == null || req.getOldToOperationId() == null
+                || req.getNewToOperationId() == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "fromOperationId, oldToOperationId and newToOperationId are required");
+        }
+        if (req.getOldToOperationId().equals(req.getNewToOperationId())) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "New target is the same as old target");
+        }
+        if (req.getFromOperationId().equals(req.getNewToOperationId())) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Cannot connect a node to itself");
+        }
+
+        routingRepository.findById(routingId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Routing not found"));
+
+        // Verify both operations are in the routing
+        List<RoutingStep> stepsInRouting = routingStepRepository.findByRoutingIdOrderByRoutingStepIdAsc(routingId);
+        Set<Long> opIdsInRouting = stepsInRouting.stream().map(RoutingStep::getOperationId).collect(Collectors.toSet());
+        if (!opIdsInRouting.contains(req.getFromOperationId()) ||
+            !opIdsInRouting.contains(req.getNewToOperationId())) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "Both source and new target must be operations in this routing");
+        }
+
+        // Reset to UNDER_REVIEW so GM must re-approve after this edit
+        resetToUnderReviewIfApproved(routingId);
+
+        // Find the existing edge from -> oldTo
+        List<RoutingEdge> outgoing = routingEdgeRepository.findByRoutingIdAndFromOperationId(routingId, req.getFromOperationId());
+        RoutingEdge existing = null;
+        for (RoutingEdge e : outgoing) {
+            if (req.getOldToOperationId().equals(e.getToOperationId())) {
+                existing = e;
+                break;
+            }
+        }
+        if (existing == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Edge from -> oldTo does not exist");
+        }
+
+        // Make sure new edge wouldn't be a duplicate
+        for (RoutingEdge e : outgoing) {
+            if (req.getNewToOperationId().equals(e.getToOperationId())) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                        "An edge from this source to the new target already exists");
+            }
+        }
+
+        String preservedType = existing.getEdgeType() == null ? "sequential" : existing.getEdgeType();
+        routingEdgeRepository.delete(existing);
+
+        Operation fromOp = operationRepository.findById(req.getFromOperationId()).orElse(null);
+        Operation newToOp = operationRepository.findById(req.getNewToOperationId()).orElse(null);
+
+        Long nextEdgeId = routingEdgeRepository.findMaxEdgeId() + 1;
+        RoutingEdge fresh = new RoutingEdge();
+        fresh.setEdgeId(nextEdgeId);
+        fresh.setRoutingId(routingId);
+        fresh.setFromOperationId(req.getFromOperationId());
+        fresh.setToOperationId(req.getNewToOperationId());
+        fresh.setFromName(fromOp == null ? "" : fromOp.getName());
+        fresh.setToName(newToOp == null ? "" : newToOp.getName());
+        fresh.setEdgeType(preservedType);
+        routingEdgeRepository.save(fresh);
+
+        log.info("[reconnectEdge] === END ===");
+        return getProcessPlan(routingId);
+    }
+
+    /**
+     * Move an existing operation to a new position in the routing.
+     * Strategy: detach (auto-bridge old neighbors), then add new edges
+     * directly based on chosen mode. The routing step row stays intact —
+     * only edges change.
+     */
+    @Transactional
+    public ProcessPlanResponse moveOperation(Long routingId, com.cutm.smo.dto.MoveOperationRequest req) {
+        log.info("[moveOperation] === START routingId={}, opId={}, mode={}, position={}, anchor={} ===",
+                routingId,
+                req == null ? null : req.getOperationId(),
+                req == null ? null : req.getMode(),
+                req == null ? null : req.getPosition(),
+                req == null ? null : req.getAnchorOperationId());
+
+        if (req == null || req.getOperationId() == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "operationId is required");
+        }
+        Long opId = req.getOperationId();
+
+        routingRepository.findById(routingId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Routing not found"));
+
+        List<RoutingStep> stepsInRouting = routingStepRepository.findByRoutingIdOrderByRoutingStepIdAsc(routingId);
+        boolean inRouting = stepsInRouting.stream().anyMatch(s -> opId.equals(s.getOperationId()));
+        if (!inRouting) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Operation is not part of the selected routing");
+        }
+
+        // Reset to UNDER_REVIEW so GM must re-approve after this edit
+        resetToUnderReviewIfApproved(routingId);
+
+        String mode = req.getMode() == null ? "SPLIT_EDGE" : req.getMode().trim().toUpperCase();
+
+        // Step 1: Detach (remove all edges touching this op, optionally bridging)
+        detachOperationFromRouting(routingId, opId, !req.isSkipAutoBridge());
+
+        if ("TERMINAL".equals(mode)) {
+            log.info("[moveOperation] === END (TERMINAL) ===");
+            return getProcessPlan(routingId);
+        }
+
+        if (req.getAnchorOperationId() == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "anchorOperationId is required for non-TERMINAL moves");
+        }
+        Long anchorId = req.getAnchorOperationId();
+        if (anchorId.equals(opId)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Cannot move an operation relative to itself");
+        }
+        boolean anchorInRouting = stepsInRouting.stream().anyMatch(s -> anchorId.equals(s.getOperationId()));
+        if (!anchorInRouting) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Anchor operation is not part of the selected routing");
+        }
+
+        Operation anchorOp = operationRepository.findById(anchorId).orElse(null);
+        Operation movingOp = operationRepository.findById(opId).orElse(null);
+        Long nextEdgeId = routingEdgeRepository.findMaxEdgeId() + 1;
+
+        // Step 2: Add new edges based on mode
+        if ("ADD_BRANCH".equals(mode)) {
+            // anchor -> moving op
+            RoutingEdge e1 = new RoutingEdge();
+            e1.setEdgeId(nextEdgeId++);
+            e1.setRoutingId(routingId);
+            e1.setFromOperationId(anchorId);
+            e1.setToOperationId(opId);
+            e1.setFromName(anchorOp == null ? "" : anchorOp.getName());
+            e1.setToName(movingOp == null ? "" : movingOp.getName());
+            e1.setEdgeType("parallel");
+            routingEdgeRepository.save(e1);
+
+            if (req.getMergeTargetOperationId() != null) {
+                Long mt = req.getMergeTargetOperationId();
+                boolean mtInRouting = stepsInRouting.stream().anyMatch(s -> mt.equals(s.getOperationId()));
+                if (!mtInRouting) {
+                    throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Branch end operation is not part of the selected routing");
+                }
+                Operation mtOp = operationRepository.findById(mt).orElse(null);
+                RoutingEdge e2 = new RoutingEdge();
+                e2.setEdgeId(nextEdgeId);
+                e2.setRoutingId(routingId);
+                e2.setFromOperationId(opId);
+                e2.setToOperationId(mt);
+                e2.setFromName(movingOp == null ? "" : movingOp.getName());
+                e2.setToName(mtOp == null ? "" : mtOp.getName());
+                e2.setEdgeType("parallel");
+                routingEdgeRepository.save(e2);
+            }
+            log.info("[moveOperation] === END (ADD_BRANCH) ===");
+            return getProcessPlan(routingId);
+        }
+
+        // SPLIT_EDGE
+        String position = req.getPosition() == null ? "" : req.getPosition().trim().toUpperCase();
+        Long otherEnd = req.getOtherEndOperationId();
+
+        if ("AFTER".equals(position)) {
+            // Determine other end if not provided (must be unique)
+            if (otherEnd == null) {
+                List<RoutingEdge> outgoing = routingEdgeRepository.findByRoutingIdAndFromOperationId(routingId, anchorId);
+                if (outgoing.size() > 1) {
+                    throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                            "Anchor has multiple outgoing edges. Specify otherEndOperationId.");
+                }
+                otherEnd = outgoing.isEmpty() ? null : outgoing.get(0).getToOperationId();
+            }
+            insertBetween(routingId, anchorId, otherEnd, opId, nextEdgeId);
+        } else if ("BEFORE".equals(position)) {
+            if (otherEnd == null) {
+                List<RoutingEdge> all = routingEdgeRepository.findByRoutingIdOrderByEdgeIdAsc(routingId);
+                final Long anchorRef = anchorId;
+                List<RoutingEdge> incoming = all.stream()
+                        .filter(e -> anchorRef.equals(e.getToOperationId()))
+                        .collect(Collectors.toList());
+                if (incoming.size() > 1) {
+                    throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                            "Anchor has multiple incoming edges. Specify otherEndOperationId.");
+                }
+                otherEnd = incoming.isEmpty() ? null : incoming.get(0).getFromOperationId();
+            }
+            insertBetween(routingId, otherEnd, anchorId, opId, nextEdgeId);
+        } else {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "position must be AFTER or BEFORE for SPLIT_EDGE");
+        }
+
+        log.info("[moveOperation] === END (SPLIT_EDGE) ===");
+        return getProcessPlan(routingId);
+    }
+
+    /**
+     * Helper: insert moving operation between fromOp and toOp.
+     * If fromOp is null → just create toOp's predecessor: opId -> toOp (prepend)
+     * If toOp is null → just create fromOp's successor: fromOp -> opId (append)
+     * Otherwise: split fromOp -> toOp into fromOp -> opId -> toOp.
+     */
+    private void insertBetween(Long routingId, Long fromOp, Long toOp, Long opId, Long startingEdgeId) {
+        Long nextEdgeId = startingEdgeId;
+        Operation movingOp = operationRepository.findById(opId).orElse(null);
+        Operation fromOpEntity = fromOp == null ? null : operationRepository.findById(fromOp).orElse(null);
+        Operation toOpEntity = toOp == null ? null : operationRepository.findById(toOp).orElse(null);
+        String movingName = movingOp == null ? "" : movingOp.getName();
+
+        if (fromOp != null && toOp != null) {
+            // Remove existing edge fromOp -> toOp
+            List<RoutingEdge> outgoing = routingEdgeRepository.findByRoutingIdAndFromOperationId(routingId, fromOp);
+            for (RoutingEdge e : outgoing) {
+                if (toOp.equals(e.getToOperationId())) {
+                    routingEdgeRepository.delete(e);
+                    break;
+                }
+            }
+
+            RoutingEdge e1 = new RoutingEdge();
+            e1.setEdgeId(nextEdgeId++);
+            e1.setRoutingId(routingId);
+            e1.setFromOperationId(fromOp);
+            e1.setToOperationId(opId);
+            e1.setFromName(fromOpEntity == null ? "" : fromOpEntity.getName());
+            e1.setToName(movingName);
+            e1.setEdgeType("sequential");
+            routingEdgeRepository.save(e1);
+
+            RoutingEdge e2 = new RoutingEdge();
+            e2.setEdgeId(nextEdgeId);
+            e2.setRoutingId(routingId);
+            e2.setFromOperationId(opId);
+            e2.setToOperationId(toOp);
+            e2.setFromName(movingName);
+            e2.setToName(toOpEntity == null ? "" : toOpEntity.getName());
+            e2.setEdgeType("sequential");
+            routingEdgeRepository.save(e2);
+        } else if (fromOp != null) {
+            RoutingEdge e1 = new RoutingEdge();
+            e1.setEdgeId(nextEdgeId);
+            e1.setRoutingId(routingId);
+            e1.setFromOperationId(fromOp);
+            e1.setToOperationId(opId);
+            e1.setFromName(fromOpEntity == null ? "" : fromOpEntity.getName());
+            e1.setToName(movingName);
+            e1.setEdgeType("sequential");
+            routingEdgeRepository.save(e1);
+        } else if (toOp != null) {
+            RoutingEdge e1 = new RoutingEdge();
+            e1.setEdgeId(nextEdgeId);
+            e1.setRoutingId(routingId);
+            e1.setFromOperationId(opId);
+            e1.setToOperationId(toOp);
+            e1.setFromName(movingName);
+            e1.setToName(toOpEntity == null ? "" : toOpEntity.getName());
+            e1.setEdgeType("sequential");
+            routingEdgeRepository.save(e1);
+        }
+    }
+
+    /**
+     * Internal helper: remove all edges touching operationId in routingId,
+     * optionally bridging predecessors -> successors.
+     * Does NOT remove the routing step itself, so the operation remains in the routing
+     * (becomes a terminal/orphan node when called by TERMINAL mode).
+     */
+    private void detachOperationFromRouting(Long routingId, Long operationId, boolean autoBridge) {
+        List<RoutingEdge> allEdges = routingEdgeRepository.findByRoutingIdOrderByEdgeIdAsc(routingId);
+        List<Long> predecessors = new ArrayList<>();
+        List<Long> successors = new ArrayList<>();
+        List<RoutingEdge> toRemove = new ArrayList<>();
+        for (RoutingEdge e : allEdges) {
+            boolean touches = false;
+            if (operationId.equals(e.getToOperationId())) {
+                predecessors.add(e.getFromOperationId());
+                touches = true;
+            }
+            if (operationId.equals(e.getFromOperationId())) {
+                successors.add(e.getToOperationId());
+                touches = true;
+            }
+            if (touches) toRemove.add(e);
+        }
+        for (RoutingEdge e : toRemove) {
+            routingEdgeRepository.delete(e);
+        }
+        if (autoBridge && !predecessors.isEmpty() && !successors.isEmpty()) {
+            Long nextEdgeId = routingEdgeRepository.findMaxEdgeId() + 1;
+            Map<Long, Operation> opMap = operationRepository.findAllById(
+                    java.util.stream.Stream.concat(predecessors.stream(), successors.stream())
+                            .distinct().collect(Collectors.toList())).stream()
+                    .collect(Collectors.toMap(Operation::getOperationId, o -> o));
+            Set<String> existingPairs = routingEdgeRepository.findByRoutingIdOrderByEdgeIdAsc(routingId).stream()
+                    .map(e -> e.getFromOperationId() + "->" + e.getToOperationId())
+                    .collect(Collectors.toSet());
+            for (Long p : predecessors) {
+                for (Long s : successors) {
+                    if (p.equals(s)) continue;
+                    String key = p + "->" + s;
+                    if (existingPairs.contains(key)) continue;
+                    RoutingEdge bridge = new RoutingEdge();
+                    bridge.setEdgeId(nextEdgeId++);
+                    bridge.setRoutingId(routingId);
+                    bridge.setFromOperationId(p);
+                    bridge.setToOperationId(s);
+                    bridge.setFromName(opMap.get(p) != null ? opMap.get(p).getName() : "");
+                    bridge.setToName(opMap.get(s) != null ? opMap.get(s).getName() : "");
+                    bridge.setEdgeType("sequential");
+                    routingEdgeRepository.save(bridge);
+                    existingPairs.add(key);
+                }
+            }
+        }
+    }
+
+    /**
+     * Add a new edge from one existing operation to another in the same routing.
+     * Both operations must already be in the routing. Duplicate edges are rejected.
+     */
+    @Transactional
+    public ProcessPlanResponse addEdgeBetweenOperations(Long routingId, com.cutm.smo.dto.AddEdgeRequest req) {
+        log.info("[addEdge] routingId={}, from={}, to={}",
+                routingId,
+                req == null ? null : req.getFromOperationId(),
+                req == null ? null : req.getToOperationId());
+
+        if (req == null || req.getFromOperationId() == null || req.getToOperationId() == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "fromOperationId and toOperationId are required");
+        }
+        if (req.getFromOperationId().equals(req.getToOperationId())) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Cannot connect a step to itself");
+        }
+
+        routingRepository.findById(routingId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Routing not found"));
+
+        List<RoutingStep> stepsInRouting = routingStepRepository.findByRoutingIdOrderByRoutingStepIdAsc(routingId);
+        Set<Long> opIdsInRouting = stepsInRouting.stream().map(RoutingStep::getOperationId).collect(Collectors.toSet());
+        if (!opIdsInRouting.contains(req.getFromOperationId())) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Source step is not part of the selected routing");
+        }
+        if (!opIdsInRouting.contains(req.getToOperationId())) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Target step is not part of the selected routing");
+        }
+
+        // Reset to UNDER_REVIEW so GM must re-approve after this edit
+        resetToUnderReviewIfApproved(routingId);
+
+        // Check for duplicate edge
+        List<RoutingEdge> outgoing = routingEdgeRepository.findByRoutingIdAndFromOperationId(routingId, req.getFromOperationId());
+        for (RoutingEdge e : outgoing) {
+            if (req.getToOperationId().equals(e.getToOperationId())) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "A connection already exists between these two steps");
+            }
+        }
+
+        Operation fromOp = operationRepository.findById(req.getFromOperationId()).orElse(null);
+        Operation toOp = operationRepository.findById(req.getToOperationId()).orElse(null);
+        String edgeType = (req.getEdgeType() == null || req.getEdgeType().trim().isEmpty())
+                ? "sequential" : req.getEdgeType().trim();
+
+        RoutingEdge edge = new RoutingEdge();
+        edge.setEdgeId(routingEdgeRepository.findMaxEdgeId() + 1);
+        edge.setRoutingId(routingId);
+        edge.setFromOperationId(req.getFromOperationId());
+        edge.setToOperationId(req.getToOperationId());
+        edge.setFromName(fromOp == null ? "" : fromOp.getName());
+        edge.setToName(toOp == null ? "" : toOp.getName());
+        edge.setEdgeType(edgeType);
+        routingEdgeRepository.save(edge);
+
+        log.info("[addEdge] ✓ EDGE ADDED: {} -> {}", req.getFromOperationId(), req.getToOperationId());
+        return getProcessPlan(routingId);
+    }
 }
