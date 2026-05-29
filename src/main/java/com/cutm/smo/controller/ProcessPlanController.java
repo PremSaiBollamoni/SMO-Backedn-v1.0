@@ -7,6 +7,7 @@ import com.cutm.smo.dto.WorkflowEdge;
 import com.cutm.smo.services.AccessControlService;
 import com.cutm.smo.services.NodeMetricsService;
 import com.cutm.smo.services.ProcessPlanService;
+import com.cutm.smo.services.BreakWindowService;
 import com.cutm.smo.util.LoggingUtil;
 import com.cutm.smo.repositories.BinRepository;
 import com.cutm.smo.repositories.WipTrackingRepository;
@@ -34,9 +35,11 @@ public class ProcessPlanController {
     private final WipTrackingRepository wipTrackingRepository;
     private final BinAssignmentHistoryRepository binAssignmentHistoryRepository;
     private final OrderRepository orderRepository;
+    private final BreakWindowService breakWindowService;
 
     public ProcessPlanController(ProcessPlanService processPlanService, AccessControlService accessControlService, NodeMetricsService nodeMetricsService,
-            BinRepository binRepository, WipTrackingRepository wipTrackingRepository, BinAssignmentHistoryRepository binAssignmentHistoryRepository, OrderRepository orderRepository) {
+            BinRepository binRepository, WipTrackingRepository wipTrackingRepository, BinAssignmentHistoryRepository binAssignmentHistoryRepository, OrderRepository orderRepository,
+            BreakWindowService breakWindowService) {
         this.processPlanService = processPlanService;
         this.accessControlService = accessControlService;
         this.nodeMetricsService = nodeMetricsService;
@@ -44,6 +47,7 @@ public class ProcessPlanController {
         this.wipTrackingRepository = wipTrackingRepository;
         this.binAssignmentHistoryRepository = binAssignmentHistoryRepository;
         this.orderRepository = orderRepository;
+        this.breakWindowService = breakWindowService;
     }
 
     @PostMapping("/draft")
@@ -374,10 +378,13 @@ public class ProcessPlanController {
             
             // Fetch real data from repositories
             // Count active bins for this operation (bins currently at this operation)
+            // Check both status and currentStatus fields with case-insensitive comparison
             List<?> activeBinsList = binRepository.findAll().stream()
                 .filter(bin -> bin.getCurrentOperationId() != null && 
-                        bin.getCurrentOperationId().equals(operationId) && 
-                        "ACTIVE".equals(bin.getStatus()))
+                        bin.getCurrentOperationId().equals(operationId) &&
+                        (!"COMPLETED".equalsIgnoreCase(bin.getStatus()) &&
+                         !"completed".equalsIgnoreCase(bin.getCurrentStatus()) &&
+                         !"free".equalsIgnoreCase(bin.getCurrentStatus())))
                 .toList();
             int activeBins = activeBinsList.size();
             
@@ -387,18 +394,23 @@ public class ProcessPlanController {
                         wip.getOperationId().equals(operationId))
                 .toList();
             
-            // WIP Quantity: trays currently in progress or pending at this operation
-            int wipQuantity = wipList.stream()
+            // WIP Quantity: number of distinct TRAYS (bins) currently in progress at this operation
+            // Count trays, NOT piece quantity — 1 tray = 1 regardless of how many pieces it holds
+            int wipQuantity = (int) wipList.stream()
                 .filter(wip -> "IN_PROGRESS".equals(((com.cutm.smo.models.WipTracking)wip).getStatus()) || 
                                "PENDING".equals(((com.cutm.smo.models.WipTracking)wip).getStatus()))
-                .mapToInt(wip -> ((com.cutm.smo.models.WipTracking)wip).getQty() != null ? ((com.cutm.smo.models.WipTracking)wip).getQty() : 0)
-                .sum();
+                .map(wip -> ((com.cutm.smo.models.WipTracking)wip).getBinId())
+                .filter(binId -> binId != null)
+                .distinct()
+                .count();
             
-            // Completed Quantity: trays that have completed this operation
-            int completedQuantity = wipList.stream()
+            // Completed Quantity: number of distinct TRAYS (bins) that completed this operation
+            int completedQuantity = (int) wipList.stream()
                 .filter(wip -> "COMPLETED".equals(((com.cutm.smo.models.WipTracking)wip).getStatus()))
-                .mapToInt(wip -> ((com.cutm.smo.models.WipTracking)wip).getQty() != null ? ((com.cutm.smo.models.WipTracking)wip).getQty() : 0)
-                .sum();
+                .map(wip -> ((com.cutm.smo.models.WipTracking)wip).getBinId())
+                .filter(binId -> binId != null)
+                .distinct()
+                .count();
             
             // Count active operators (distinct operators working on this operation)
             long activeOperators = wipList.stream()
@@ -465,6 +477,54 @@ public class ProcessPlanController {
             response.put("last_action", lastAction);
             response.put("last_action_time", lastActionTime);
             response.put("estimated_time", operation.getStandardTime() != null ? operation.getStandardTime() + " min" : "N/A");
+
+            // ── Actual timing from wiptracking ──────────────────────────────
+            // Find the most recent completed wiptracking record for this operation
+            // to show real start/end times and actual duration.
+            java.time.LocalDateTime actualStart = null;
+            java.time.LocalDateTime actualEnd = null;
+            String actualDuration = "N/A";
+            String actualStartStr = "N/A";
+            String actualEndStr = "N/A";
+
+            List<com.cutm.smo.models.WipTracking> wipRecords = wipTrackingRepository.findAll().stream()
+                .filter(w -> w.getOperationId() != null && w.getOperationId().equals(operationId))
+                .filter(w -> w.getStartTime() != null)
+                .sorted((a, b) -> {
+                    if (a.getEndTime() == null && b.getEndTime() == null) return 0;
+                    if (a.getEndTime() == null) return 1;
+                    if (b.getEndTime() == null) return -1;
+                    return b.getEndTime().compareTo(a.getEndTime());
+                })
+                .limit(1)
+                .toList();
+
+            if (!wipRecords.isEmpty()) {
+                com.cutm.smo.models.WipTracking latest = wipRecords.get(0);
+                actualStart = latest.getStartTime();
+                actualEnd = latest.getEndTime();
+                if (actualStart != null) {
+                    actualStartStr = actualStart.toString().replace("T", " ").substring(0, Math.min(19, actualStart.toString().length()));
+                }
+                if (actualEnd != null) {
+                    actualEndStr = actualEnd.toString().replace("T", " ").substring(0, Math.min(19, actualEnd.toString().length()));
+                    if (actualStart != null) {
+                        long netSeconds = breakWindowService.calculateNetDurationSeconds(actualStart, actualEnd);
+                        actualDuration = breakWindowService.formatDuration(netSeconds);
+                    }
+                } else {
+                    // Still in progress — show start time, no end yet
+                    actualEndStr = "In progress...";
+                    if (actualStart != null) {
+                        long netSeconds = breakWindowService.calculateNetDurationSeconds(actualStart, null);
+                        actualDuration = breakWindowService.formatDuration(netSeconds) + " (ongoing)";
+                    }
+                }
+            }
+
+            response.put("actual_start_time", actualStartStr);
+            response.put("actual_end_time", actualEndStr);
+            response.put("actual_duration", actualDuration);
             
             // Get NEXT operation from routing edges (following graph, not sequential)
             String nextOperation = "N/A";
@@ -493,6 +553,148 @@ public class ProcessPlanController {
             long endTime = System.currentTimeMillis();
             LoggingUtil.logError(log, "Failed to get operation status for routing: " + routingId + ", operation: " + operationId, e);
             LoggingUtil.logPerformance(log, "Get Operation Status (Failed)", startTime, endTime);
+            throw e;
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    //  EDIT-IN-PLACE FEATURE: Insert / Rename within a single routing
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /**
+     * Insert a new operation into a routing's flow graph (edge surgery).
+     * Returns the same shape as GET /{routingId} so the UI re-renders the
+     * existing graph widget without any custom logic.
+     */
+    @PostMapping("/{routingId}/insert-operation")
+    public ProcessPlanResponse insertOperation(
+            @PathVariable Long routingId,
+            @RequestParam(required = false, defaultValue = "SYSTEM") String actorEmpId,
+            @RequestBody com.cutm.smo.dto.InsertOperationRequest request) {
+        long startTime = System.currentTimeMillis();
+        try {
+            log.info("=== INSERT OPERATION START === routingId={}", routingId);
+            ProcessPlanResponse response = processPlanService.insertOperationIntoRouting(routingId, request);
+            LoggingUtil.logPerformance(log, "Insert Operation Into Routing", startTime, System.currentTimeMillis());
+            log.info("=== INSERT OPERATION END - SUCCESS ===");
+            return response;
+        } catch (Exception e) {
+            LoggingUtil.logError(log, "Failed to insert operation into routing: " + routingId, e);
+            LoggingUtil.logPerformance(log, "Insert Operation Into Routing (Failed)", startTime, System.currentTimeMillis());
+            throw e;
+        }
+    }
+
+    /**
+     * Rename an operation within a SPECIFIC routing only.
+     * If the operation is shared with other routings, the service clones it
+     * first so the rename is scoped to this routing.
+     */
+    @PutMapping("/{routingId}/rename-operation")
+    public ProcessPlanResponse renameOperation(
+            @PathVariable Long routingId,
+            @RequestParam(required = false, defaultValue = "SYSTEM") String actorEmpId,
+            @RequestBody com.cutm.smo.dto.RenameOperationRequest request) {
+        long startTime = System.currentTimeMillis();
+        try {
+            log.info("=== RENAME OPERATION START === routingId={}", routingId);
+            ProcessPlanResponse response = processPlanService.renameOperationInRouting(routingId, request);
+            LoggingUtil.logPerformance(log, "Rename Operation In Routing", startTime, System.currentTimeMillis());
+            log.info("=== RENAME OPERATION END - SUCCESS ===");
+            return response;
+        } catch (Exception e) {
+            LoggingUtil.logError(log, "Failed to rename operation in routing: " + routingId, e);
+            LoggingUtil.logPerformance(log, "Rename Operation In Routing (Failed)", startTime, System.currentTimeMillis());
+            throw e;
+        }
+    }
+
+    /**
+     * Remove an operation from a routing's flow.
+     * autoBridge defaults to true so flow stays connected.
+     */
+    @DeleteMapping("/{routingId}/operations/{operationId}")
+    public ProcessPlanResponse removeOperation(
+            @PathVariable Long routingId,
+            @PathVariable Long operationId,
+            @RequestParam(required = false, defaultValue = "true") boolean autoBridge,
+            @RequestParam(required = false, defaultValue = "SYSTEM") String actorEmpId) {
+        long startTime = System.currentTimeMillis();
+        try {
+            log.info("=== DELETE OPERATION FROM ROUTING START === routingId={}, opId={}", routingId, operationId);
+            ProcessPlanResponse response = processPlanService.removeOperationFromRouting(routingId, operationId, autoBridge);
+            LoggingUtil.logPerformance(log, "Delete Operation From Routing", startTime, System.currentTimeMillis());
+            log.info("=== DELETE OPERATION FROM ROUTING END - SUCCESS ===");
+            return response;
+        } catch (Exception e) {
+            LoggingUtil.logError(log, "Failed to remove operation from routing: " + routingId, e);
+            LoggingUtil.logPerformance(log, "Delete Operation From Routing (Failed)", startTime, System.currentTimeMillis());
+            throw e;
+        }
+    }
+
+    /**
+     * Redirect an existing edge to a new target operation in the same routing.
+     */
+    @PostMapping("/{routingId}/reconnect")
+    public ProcessPlanResponse reconnectEdge(
+            @PathVariable Long routingId,
+            @RequestParam(required = false, defaultValue = "SYSTEM") String actorEmpId,
+            @RequestBody com.cutm.smo.dto.ReconnectEdgeRequest request) {
+        long startTime = System.currentTimeMillis();
+        try {
+            log.info("=== RECONNECT EDGE START === routingId={}", routingId);
+            ProcessPlanResponse response = processPlanService.reconnectEdge(routingId, request);
+            LoggingUtil.logPerformance(log, "Reconnect Edge", startTime, System.currentTimeMillis());
+            log.info("=== RECONNECT EDGE END - SUCCESS ===");
+            return response;
+        } catch (Exception e) {
+            LoggingUtil.logError(log, "Failed to reconnect edge in routing: " + routingId, e);
+            LoggingUtil.logPerformance(log, "Reconnect Edge (Failed)", startTime, System.currentTimeMillis());
+            throw e;
+        }
+    }
+
+    /**
+     * Move an existing operation to a new position in the routing.
+     */
+    @PostMapping("/{routingId}/move-operation")
+    public ProcessPlanResponse moveOperation(
+            @PathVariable Long routingId,
+            @RequestParam(required = false, defaultValue = "SYSTEM") String actorEmpId,
+            @RequestBody com.cutm.smo.dto.MoveOperationRequest request) {
+        long startTime = System.currentTimeMillis();
+        try {
+            log.info("=== MOVE OPERATION START === routingId={}", routingId);
+            ProcessPlanResponse response = processPlanService.moveOperation(routingId, request);
+            LoggingUtil.logPerformance(log, "Move Operation", startTime, System.currentTimeMillis());
+            log.info("=== MOVE OPERATION END - SUCCESS ===");
+            return response;
+        } catch (Exception e) {
+            LoggingUtil.logError(log, "Failed to move operation in routing: " + routingId, e);
+            LoggingUtil.logPerformance(log, "Move Operation (Failed)", startTime, System.currentTimeMillis());
+            throw e;
+        }
+    }
+
+    /**
+     * Add a new connection (edge) between two steps that already exist in the routing.
+     */
+    @PostMapping("/{routingId}/add-edge")
+    public ProcessPlanResponse addEdge(
+            @PathVariable Long routingId,
+            @RequestParam(required = false, defaultValue = "SYSTEM") String actorEmpId,
+            @RequestBody com.cutm.smo.dto.AddEdgeRequest request) {
+        long startTime = System.currentTimeMillis();
+        try {
+            log.info("=== ADD EDGE START === routingId={}", routingId);
+            ProcessPlanResponse response = processPlanService.addEdgeBetweenOperations(routingId, request);
+            LoggingUtil.logPerformance(log, "Add Edge", startTime, System.currentTimeMillis());
+            log.info("=== ADD EDGE END - SUCCESS ===");
+            return response;
+        } catch (Exception e) {
+            LoggingUtil.logError(log, "Failed to add edge in routing: " + routingId, e);
+            LoggingUtil.logPerformance(log, "Add Edge (Failed)", startTime, System.currentTimeMillis());
             throw e;
         }
     }
