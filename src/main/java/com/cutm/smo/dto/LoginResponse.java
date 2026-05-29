@@ -1,10 +1,15 @@
 package com.cutm.smo.dto;
 
+import java.util.List;
+import java.util.Map;
+
 public class LoginResponse {
     private String role;
     private String employeeName;
     private String empId;
     private String activities;
+    /** All roles assigned to this employee. Empty if only one role. */
+    private List<Map<String, Object>> allRoles;
 
     public LoginResponse() {}
 
@@ -21,35 +26,14 @@ public class LoginResponse {
         this.activities = activities;
     }
 
-    public String getRole() {
-        return role;
-    }
-
-    public void setRole(String role) {
-        this.role = role;
-    }
-
-    public String getEmployeeName() {
-        return employeeName;
-    }
-
-    public void setEmployeeName(String employeeName) {
-        this.employeeName = employeeName;
-    }
-
-    public String getEmpId() {
-        return empId;
-    }
-
-    public void setEmpId(String empId) {
-        this.empId = empId;
-    }
-
-    public String getActivities() {
-        return activities;
-    }
-
-    public void setActivities(String activities) {
-        this.activities = activities;
-    }
+    public String getRole() { return role; }
+    public void setRole(String role) { this.role = role; }
+    public String getEmployeeName() { return employeeName; }
+    public void setEmployeeName(String employeeName) { this.employeeName = employeeName; }
+    public String getEmpId() { return empId; }
+    public void setEmpId(String empId) { this.empId = empId; }
+    public String getActivities() { return activities; }
+    public void setActivities(String activities) { this.activities = activities; }
+    public List<Map<String, Object>> getAllRoles() { return allRoles; }
+    public void setAllRoles(List<Map<String, Object>> allRoles) { this.allRoles = allRoles; }
 }
