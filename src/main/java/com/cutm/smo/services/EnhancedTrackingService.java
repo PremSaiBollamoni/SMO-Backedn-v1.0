@@ -10,6 +10,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.time.LocalDateTime;
 import java.time.temporal.ChronoUnit;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
@@ -36,6 +37,12 @@ public class EnhancedTrackingService {
 
     @Autowired
     private QrEventService qrEventService;
+
+    @Autowired
+    private BinAssignmentHistoryRepository binAssignmentHistoryRepository;
+
+    @Autowired
+    private BreakWindowService breakWindowService;
 
     /**
      * Process tracking request with two-phase workflow
@@ -204,6 +211,18 @@ public class EnhancedTrackingService {
         // Clean up temp assignment (remove completed record)
         tempActiveAssignmentRepository.delete(assignment);
 
+        // Update bin_assignment_history end time for this bin
+        // Find the most recent open history record (no end time) for this bin and close it
+        List<BinAssignmentHistory> openHistory = binAssignmentHistoryRepository
+                .findByBinIdOrderByCreatedAtDesc(bin.getBinId());
+        openHistory.stream()
+                .filter(h -> h.getAssignmentEndTime() == null)
+                .findFirst()
+                .ifPresent(h -> {
+                    h.setAssignmentEndTime(LocalDateTime.now());
+                    binAssignmentHistoryRepository.save(h);
+                });
+
         // Build response
         response.put("success", true);
         response.put("flowType", "COMPLETION");
@@ -212,15 +231,22 @@ public class EnhancedTrackingService {
         response.put("employeeQr", request.getEmployeeQr());
         response.put("trayQr", request.getTrayQr());
 
-        // Duration tracking - time between 1st scan (assignment) and 2nd scan (completion)
+        // Duration tracking - net time between 1st scan (assignment) and 2nd scan (completion)
+        // Subtracts any active break windows that fall within the tracking period
         LocalDateTime startTime = wipTracking.getStartTime();
         LocalDateTime endTime = wipTracking.getEndTime();
         if (startTime != null && endTime != null) {
-            long durationSeconds = ChronoUnit.SECONDS.between(startTime, endTime);
+            long netSeconds = breakWindowService.calculateNetDurationSeconds(startTime, endTime);
+            long rawSeconds = ChronoUnit.SECONDS.between(startTime, endTime);
             response.put("startTime", startTime.toString());
             response.put("endTime", endTime.toString());
-            response.put("durationSeconds", durationSeconds);
-            response.put("durationFormatted", formatDuration(durationSeconds));
+            response.put("durationSeconds", netSeconds);
+            response.put("durationFormatted", breakWindowService.formatDuration(netSeconds));
+            if (netSeconds < rawSeconds) {
+                long breakSeconds = rawSeconds - netSeconds;
+                response.put("breakDeductedSeconds", breakSeconds);
+                response.put("breakDeductedFormatted", breakWindowService.formatDuration(breakSeconds));
+            }
         }
 
         // Add progression details
