@@ -6,6 +6,8 @@ import com.cutm.smo.models.EmployeeInfo;
 import com.cutm.smo.models.EmployeeLogin;
 import com.cutm.smo.repositories.EmployeeInfoRepository;
 import com.cutm.smo.repositories.EmployeeLoginRepository;
+import com.cutm.smo.repositories.EmployeeRoleRepository;
+import com.cutm.smo.repositories.RoleRepository;
 import com.cutm.smo.util.LoggingUtil;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
@@ -17,10 +19,17 @@ import org.springframework.web.server.ResponseStatusException;
 public class AuthService {
     private final EmployeeLoginRepository employeeLoginRepository;
     private final EmployeeInfoRepository employeeInfoRepository;
+    private final EmployeeRoleRepository employeeRoleRepository;
+    private final RoleRepository roleRepository;
 
-    public AuthService(EmployeeLoginRepository employeeLoginRepository, EmployeeInfoRepository employeeInfoRepository) {
+    public AuthService(EmployeeLoginRepository employeeLoginRepository,
+                       EmployeeInfoRepository employeeInfoRepository,
+                       EmployeeRoleRepository employeeRoleRepository,
+                       RoleRepository roleRepository) {
         this.employeeLoginRepository = employeeLoginRepository;
         this.employeeInfoRepository = employeeInfoRepository;
+        this.employeeRoleRepository = employeeRoleRepository;
+        this.roleRepository = roleRepository;
     }
 
     public LoginResponse login(LoginRequest request) {
@@ -77,14 +86,37 @@ public class AuthService {
                     });
             log.debug("Employee information retrieved: {}", employeeInfo.getEmpName());
 
-            // Get role information
+            // Get role information — check employee_roles table first for multi-role support
             String roleName = employeeInfo.getRole() != null ? employeeInfo.getRole().getRoleName() : "USER";
             String activities = employeeInfo.getRole() != null ? employeeInfo.getRole().getActivity() : "";
+
+            // Check if employee has multiple roles in employee_roles table
+            java.util.List<com.cutm.smo.models.EmployeeRole> multiRoles =
+                    employeeRoleRepository.findByEmpId(empId);
+
+            java.util.List<java.util.Map<String, Object>> allRoles = new java.util.ArrayList<>();
+            if (!multiRoles.isEmpty()) {
+                // Build list of all roles with their activities
+                for (com.cutm.smo.models.EmployeeRole er : multiRoles) {
+                    roleRepository.findById(er.getRoleId()).ifPresent(role -> {
+                        java.util.Map<String, Object> rm = new java.util.HashMap<>();
+                        rm.put("roleId", role.getRoleId());
+                        rm.put("roleName", role.getRoleName());
+                        rm.put("activities", role.getActivity());
+                        allRoles.add(rm);
+                    });
+                }
+            }
+
             log.debug("User role: {}", roleName);
             log.debug("User activities: {}", activities);
+            log.debug("Multi-roles count: {}", allRoles.size());
 
             // Create response
-            LoginResponse response = new LoginResponse(roleName, employeeInfo.getEmpName(), employeeInfo.getEmpId().toString(), activities);
+            LoginResponse response = new LoginResponse(roleName, employeeInfo.getEmpName(),
+                    employeeInfo.getEmpId().toString(), activities);
+            // Attach all roles so Flutter can show role picker if needed
+            response.setAllRoles(allRoles);
             
             long endTime = System.currentTimeMillis();
             LoggingUtil.logAuthenticationAttempt(log, request.getLoginid(), true, null);
