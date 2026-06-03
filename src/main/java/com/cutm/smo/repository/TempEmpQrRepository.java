@@ -17,4 +17,6 @@ public interface TempEmpQrRepository extends JpaRepository<TempEmpQr, Long> {
     List<TempEmpQr> findByEmployeeIdAndStatus(Long employeeId, String status);
     
     List<TempEmpQr> findAllByOrderByCreatedAtDesc();
+    
+    List<TempEmpQr> findByOperationIdAndStatus(Long operationId, String status);
 }

@@ -1,8 +1,11 @@
 package com.cutm.smo.dto;
 
+import java.util.List;
+
 public class TrackingRequest {
     private String machineQr;
     private String employeeQr;
+    private List<Long> employeeIds;  // Multi-employee support (NEW)
     private String trayQr;
     private String status;
     private Long supervisorId; // Added for tracking who performed the action
@@ -23,6 +26,14 @@ public class TrackingRequest {
 
     public void setEmployeeQr(String employeeQr) {
         this.employeeQr = employeeQr;
+    }
+
+    public List<Long> getEmployeeIds() {
+        return employeeIds;
+    }
+
+    public void setEmployeeIds(List<Long> employeeIds) {
+        this.employeeIds = employeeIds;
     }
 
     public String getTrayQr() {

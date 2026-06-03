@@ -8,8 +8,8 @@ import lombok.Data;
 @Table(name = "machine")
 public class Machine {
     @Id
-    @Column(name = "machine_id")
-    private Long machineId;
+    @Column(name = "machine_id", length = 50)
+    private String machineId;
 
     @Column(name = "name")
     private String name;

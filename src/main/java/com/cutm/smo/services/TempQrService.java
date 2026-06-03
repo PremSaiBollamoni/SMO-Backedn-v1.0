@@ -161,4 +161,55 @@ public class TempQrService {
         }
         return false;
     }
+    
+    /**
+     * Resolve a temp QR to the employee currently mapped to it.
+     */
+    public java.util.Map<String, Object> resolveQrToEmployee(String qrId) {
+        Optional<TempEmpQr> mapping = tempEmpQrRepository.findByQrIdAndStatus(qrId, "ACTIVE");
+        if (mapping.isPresent()) {
+            TempEmpQr m = mapping.get();
+            java.util.Map<String, Object> result = new java.util.HashMap<>();
+            result.put("employeeId", m.getEmployeeId());
+            result.put("employeeName", m.getEmployeeName());
+            result.put("qrId", m.getQrId());
+            result.put("operationId", m.getOperationId());
+            result.put("operationName", m.getOperationName());
+            return result;
+        }
+        return null;
+    }
+    
+    /**
+     * Assign an operation to an active temp QR mapping.
+     */
+    @Transactional
+    public boolean assignOperation(String qrId, Long operationId, String operationName) {
+        Optional<TempEmpQr> mapping = tempEmpQrRepository.findByQrIdAndStatus(qrId, "ACTIVE");
+        if (mapping.isPresent()) {
+            TempEmpQr m = mapping.get();
+            m.setOperationId(operationId);
+            m.setOperationName(operationName);
+            tempEmpQrRepository.save(m);
+            return true;
+        }
+        return false;
+    }
+    
+    /**
+     * Get all active workers at a specific operation.
+     */
+    public java.util.List<java.util.Map<String, Object>> getWorkersByOperation(Long operationId) {
+        List<TempEmpQr> mappings = tempEmpQrRepository.findByOperationIdAndStatus(operationId, "ACTIVE");
+        java.util.List<java.util.Map<String, Object>> workers = new java.util.ArrayList<>();
+        for (TempEmpQr m : mappings) {
+            java.util.Map<String, Object> worker = new java.util.HashMap<>();
+            worker.put("employeeId", m.getEmployeeId());
+            worker.put("employeeName", m.getEmployeeName());
+            worker.put("qrId", m.getQrId());
+            worker.put("startTime", m.getStartTime().toString());
+            workers.add(worker);
+        }
+        return workers;
+    }
 }

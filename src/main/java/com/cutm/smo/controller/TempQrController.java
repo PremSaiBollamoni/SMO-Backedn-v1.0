@@ -112,4 +112,70 @@ public class TempQrController {
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(error);
         }
     }
+    
+    /**
+     * Resolve a temp QR to the employee currently mapped to it.
+     * Used by Tracking Widget when scanning Employee QR field.
+     */
+    @GetMapping("/resolve/{qrId}")
+    public ResponseEntity<?> resolveQrToEmployee(@PathVariable String qrId) {
+        try {
+            Map<String, Object> result = tempQrService.resolveQrToEmployee(qrId);
+            if (result != null) {
+                return ResponseEntity.ok(result);
+            } else {
+                Map<String, String> error = new HashMap<>();
+                error.put("error", "No active mapping found for QR: " + qrId);
+                return ResponseEntity.status(HttpStatus.NOT_FOUND).body(error);
+            }
+        } catch (Exception e) {
+            Map<String, String> error = new HashMap<>();
+            error.put("error", "Failed to resolve QR: " + e.getMessage());
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(error);
+        }
+    }
+    
+    /**
+     * Assign an operation to an active temp QR mapping.
+     * Called after tracking submit to record which operation the employee is working at.
+     */
+    @PutMapping("/assign-operation")
+    public ResponseEntity<?> assignOperation(@RequestBody Map<String, Object> body) {
+        try {
+            String qrId = (String) body.get("qrId");
+            Long operationId = Long.valueOf(body.get("operationId").toString());
+            String operationName = (String) body.get("operationName");
+            
+            boolean success = tempQrService.assignOperation(qrId, operationId, operationName);
+            if (success) {
+                Map<String, String> response = new HashMap<>();
+                response.put("message", "Operation assigned successfully");
+                return ResponseEntity.ok(response);
+            } else {
+                Map<String, String> error = new HashMap<>();
+                error.put("error", "No active mapping found for QR: " + qrId);
+                return ResponseEntity.badRequest().body(error);
+            }
+        } catch (Exception e) {
+            Map<String, String> error = new HashMap<>();
+            error.put("error", "Failed to assign operation: " + e.getMessage());
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(error);
+        }
+    }
+    
+    /**
+     * Get all active workers at a specific operation.
+     * Used by Strategic Monitor to show who's working at each node.
+     */
+    @GetMapping("/by-operation/{operationId}")
+    public ResponseEntity<?> getWorkersByOperation(@PathVariable Long operationId) {
+        try {
+            List<Map<String, Object>> workers = tempQrService.getWorkersByOperation(operationId);
+            return ResponseEntity.ok(workers);
+        } catch (Exception e) {
+            Map<String, String> error = new HashMap<>();
+            error.put("error", "Failed to get workers: " + e.getMessage());
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(error);
+        }
+    }
 }

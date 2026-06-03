@@ -168,13 +168,13 @@ public class MasterDataController {
     }
 
     @PutMapping("/machines/{id}")
-    public ResponseEntity<Map<String, Object>> updateMachine(@PathVariable Long id, @RequestBody Map<String, Object> data) {
+    public ResponseEntity<Map<String, Object>> updateMachine(@PathVariable String id, @RequestBody Map<String, Object> data) {
         log.info("PUT /api/gm/masterdata/machines/{} - Updating machine", id);
         return ResponseEntity.ok(masterDataService.updateMachine(id, data));
     }
 
     @DeleteMapping("/machines/{id}")
-    public ResponseEntity<Map<String, Object>> deleteMachine(@PathVariable Long id) {
+    public ResponseEntity<Map<String, Object>> deleteMachine(@PathVariable String id) {
         log.info("DELETE /api/gm/masterdata/machines/{} - Deleting machine", id);
         return ResponseEntity.ok(masterDataService.deleteMachine(id));
     }

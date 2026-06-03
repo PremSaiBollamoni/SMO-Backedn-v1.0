@@ -8,10 +8,7 @@ import org.springframework.stereotype.Repository;
 import java.util.List;
 
 @Repository
-public interface MachineRepository extends JpaRepository<Machine, Long> {
+public interface MachineRepository extends JpaRepository<Machine, String> {
     
     List<Machine> findByStatus(String status);
-    
-    @Query("SELECT COALESCE(MAX(m.machineId), 0) + 1 FROM Machine m")
-    Long getNextMachineId();
 }

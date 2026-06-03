@@ -29,6 +29,12 @@ public class TempEmpQr {
     @Column(name = "status", nullable = false)
     private String status; // ACTIVE, COMPLETED
     
+    @Column(name = "operation_id")
+    private Long operationId;
+    
+    @Column(name = "operation_name")
+    private String operationName;
+    
     @Column(name = "created_at")
     private LocalDateTime createdAt;
     
@@ -114,5 +120,21 @@ public class TempEmpQr {
     
     public void setCreatedBy(String createdBy) {
         this.createdBy = createdBy;
+    }
+    
+    public Long getOperationId() {
+        return operationId;
+    }
+    
+    public void setOperationId(Long operationId) {
+        this.operationId = operationId;
+    }
+    
+    public String getOperationName() {
+        return operationName;
+    }
+    
+    public void setOperationName(String operationName) {
+        this.operationName = operationName;
     }
 }

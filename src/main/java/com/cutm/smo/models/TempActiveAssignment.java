@@ -19,8 +19,11 @@ public class TempActiveAssignment {
     @Column(name = "tray_qr", nullable = false)
     private String trayQr;
 
-    @Column(name = "emp_id", nullable = false)
-    private Long empId;
+    @Column(name = "emp_id")
+    private Long empId;  // Single employee (for backward compatibility)
+
+    @Column(name = "emp_ids", columnDefinition = "JSON")
+    private String empIds;  // Multiple employees: "[1001,1002,1003]" (NEW)
 
     @Column(name = "start_time", nullable = false)
     private LocalDateTime startTime;

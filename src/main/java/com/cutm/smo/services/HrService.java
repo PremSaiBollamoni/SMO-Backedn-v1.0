@@ -730,4 +730,18 @@ public class HrService {
         }
         return allActivities.isEmpty() ? null : String.join(",", allActivities);
     }
+
+    // ─── Self-service profile helpers ───
+
+    public EmployeeInfo saveEmployee(EmployeeInfo employee) {
+        return employeeInfoRepository.save(employee);
+    }
+
+    public void updatePassword(Long empId, String newPassword) {
+        EmployeeLogin login = employeeLoginRepository.findById(empId).orElse(null);
+        if (login != null) {
+            login.setPassword(newPassword.trim());
+            employeeLoginRepository.save(login);
+        }
+    }
 }

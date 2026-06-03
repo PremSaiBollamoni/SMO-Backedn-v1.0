@@ -16,102 +16,33 @@ public class MachineService {
         this.machineRepository = machineRepository;
     }
 
-    public List<Machine> getAllMachines() { 
-        long startTime = System.currentTimeMillis();
-        try {
-            log.info("=== GET ALL MACHINES START ===");
-            List<Machine> machines = machineRepository.findAll();
-            log.info("Retrieved {} machines", machines.size());
-            long endTime = System.currentTimeMillis();
-            LoggingUtil.logPerformance(log, "Get All Machines", startTime, endTime);
-            log.info("=== GET ALL MACHINES END - SUCCESS ===");
-            return machines;
-        } catch (Exception e) {
-            long endTime = System.currentTimeMillis();
-            LoggingUtil.logError(log, "Failed to get all machines", e);
-            LoggingUtil.logPerformance(log, "Get All Machines (Failed)", startTime, endTime);
-            throw e;
-        }
+    public List<Machine> getAllMachines() {
+        return machineRepository.findAll();
     }
-    
-    public Machine getMachineById(Long id) { 
-        long startTime = System.currentTimeMillis();
-        try {
-            log.info("=== GET MACHINE BY ID START ===");
-            log.debug("Machine ID: {}", id);
-            Machine machine = machineRepository.findById(id).orElse(null);
-            if (machine != null) {
-                log.info("Machine found: {}", machine.getName());
-            } else {
-                log.warn("Machine not found with ID: {}", id);
-            }
-            long endTime = System.currentTimeMillis();
-            LoggingUtil.logPerformance(log, "Get Machine By ID", startTime, endTime);
-            log.info("=== GET MACHINE BY ID END - SUCCESS ===");
-            return machine;
-        } catch (Exception e) {
-            long endTime = System.currentTimeMillis();
-            LoggingUtil.logError(log, "Failed to get machine with ID: " + id, e);
-            LoggingUtil.logPerformance(log, "Get Machine By ID (Failed)", startTime, endTime);
-            throw e;
-        }
+
+    public Machine getMachineById(String id) {
+        return machineRepository.findById(id).orElse(null);
     }
-    
-    public Machine createMachine(Machine machine) { 
-        long startTime = System.currentTimeMillis();
-        try {
-            log.info("=== CREATE MACHINE START ===");
-            log.debug("Machine Data: {}", machine);
-            Machine saved = machineRepository.save(machine);
-            log.info("Machine created successfully with ID: {}", saved.getMachineId());
-            long endTime = System.currentTimeMillis();
-            LoggingUtil.logPerformance(log, "Create Machine", startTime, endTime);
-            log.info("=== CREATE MACHINE END - SUCCESS ===");
-            return saved;
-        } catch (Exception e) {
-            long endTime = System.currentTimeMillis();
-            LoggingUtil.logError(log, "Failed to create machine", e);
-            LoggingUtil.logPerformance(log, "Create Machine (Failed)", startTime, endTime);
-            throw e;
+
+    public Machine createMachine(Machine machine) {
+        if (machine.getMachineId() == null || machine.getMachineId().trim().isEmpty()) {
+            throw new org.springframework.web.server.ResponseStatusException(
+                org.springframework.http.HttpStatus.BAD_REQUEST, "Machine ID (QR code) is required");
         }
+        if (machineRepository.existsById(machine.getMachineId())) {
+            throw new org.springframework.web.server.ResponseStatusException(
+                org.springframework.http.HttpStatus.CONFLICT,
+                "Machine with ID '" + machine.getMachineId() + "' already exists");
+        }
+        return machineRepository.save(machine);
     }
-    
-    public Machine updateMachine(Long id, Machine machine) { 
-        long startTime = System.currentTimeMillis();
-        try {
-            log.info("=== UPDATE MACHINE START ===");
-            log.debug("Machine ID: {}", id);
-            log.debug("Machine Data: {}", machine);
-            machine.setMachineId(id);
-            Machine updated = machineRepository.save(machine);
-            log.info("Machine updated successfully with ID: {}", updated.getMachineId());
-            long endTime = System.currentTimeMillis();
-            LoggingUtil.logPerformance(log, "Update Machine", startTime, endTime);
-            log.info("=== UPDATE MACHINE END - SUCCESS ===");
-            return updated;
-        } catch (Exception e) {
-            long endTime = System.currentTimeMillis();
-            LoggingUtil.logError(log, "Failed to update machine with ID: " + id, e);
-            LoggingUtil.logPerformance(log, "Update Machine (Failed)", startTime, endTime);
-            throw e;
-        }
+
+    public Machine updateMachine(String id, Machine machine) {
+        machine.setMachineId(id);
+        return machineRepository.save(machine);
     }
-    
-    public void deleteMachine(Long id) { 
-        long startTime = System.currentTimeMillis();
-        try {
-            log.info("=== DELETE MACHINE START ===");
-            log.debug("Machine ID to delete: {}", id);
-            machineRepository.deleteById(id);
-            log.info("Machine deleted successfully with ID: {}", id);
-            long endTime = System.currentTimeMillis();
-            LoggingUtil.logPerformance(log, "Delete Machine", startTime, endTime);
-            log.info("=== DELETE MACHINE END - SUCCESS ===");
-        } catch (Exception e) {
-            long endTime = System.currentTimeMillis();
-            LoggingUtil.logError(log, "Failed to delete machine with ID: " + id, e);
-            LoggingUtil.logPerformance(log, "Delete Machine (Failed)", startTime, endTime);
-            throw e;
-        }
+
+    public void deleteMachine(String id) {
+        machineRepository.deleteById(id);
     }
 }

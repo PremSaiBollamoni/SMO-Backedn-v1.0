@@ -520,8 +520,7 @@ public class MasterDataService {
         Map<String, Object> response = new HashMap<>();
         try {
             Machine machine = new Machine();
-            Long nextId = machineRepository.getNextMachineId();
-            machine.setMachineId(nextId);
+            machine.setMachineId((String) data.get("machineId"));
             machine.setName((String) data.get("name"));
             machine.setType((String) data.get("type"));
             machine.setStatus((String) data.getOrDefault("status", "ACTIVE"));
@@ -539,7 +538,7 @@ public class MasterDataService {
     }
 
     @Transactional
-    public Map<String, Object> updateMachine(Long machineId, Map<String, Object> data) {
+    public Map<String, Object> updateMachine(String machineId, Map<String, Object> data) {
         Map<String, Object> response = new HashMap<>();
         try {
             Optional<Machine> machineOpt = machineRepository.findById(machineId);
@@ -567,7 +566,7 @@ public class MasterDataService {
     }
 
     @Transactional
-    public Map<String, Object> deleteMachine(Long machineId) {
+    public Map<String, Object> deleteMachine(String machineId) {
         Map<String, Object> response = new HashMap<>();
         try {
             if (!machineRepository.existsById(machineId)) {

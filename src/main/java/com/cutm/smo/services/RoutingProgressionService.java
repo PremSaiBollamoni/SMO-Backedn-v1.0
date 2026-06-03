@@ -267,6 +267,8 @@ public class RoutingProgressionService {
 
     /**
      * Validate if bin can complete the given operation
+     * NOTE: Sequence validation REMOVED (NEW: support operation-wise tracking regardless of flow)
+     * Allows operations to be completed in any order when workers are absent or flow is disturbed
      * @param binId The bin ID
      * @param operationId The operation to complete
      * @return Validation result
@@ -297,14 +299,8 @@ public class RoutingProgressionService {
             return result;
         }
 
-        // Check if operation matches current operation
-        if (bin.getCurrentOperationId() != null && !bin.getCurrentOperationId().equals(operationId)) {
-            result.put("valid", false);
-            result.put("message", "Operation out of sequence. Current operation: " + bin.getCurrentOperationId() + ", Attempted: " + operationId);
-            result.put("currentOperationId", bin.getCurrentOperationId());
-            result.put("attemptedOperationId", operationId);
-            return result;
-        }
+        // SEQUENCE CHECK REMOVED - Allow any operation to be completed any time
+        // This supports operation-wise tracking when workers are absent or flow is disturbed
 
         result.put("valid", true);
         result.put("message", "Operation can be completed");

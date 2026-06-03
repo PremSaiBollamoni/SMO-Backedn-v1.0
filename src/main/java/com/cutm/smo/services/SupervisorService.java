@@ -52,6 +52,12 @@ public class SupervisorService {
     @Autowired
     private com.cutm.smo.repositories.OperationRepository operationRepository;
 
+    @Autowired
+    private TempActiveAssignmentRepository tempActiveAssignmentRepository; // NEW: For team assignment lookup
+
+    @Autowired
+    private com.cutm.smo.repositories.EmployeeRepository employeeRepository; // NEW: For fetching employee names
+
     /**
      * Get all approved process plan numbers (routing IDs)
      */
@@ -261,5 +267,151 @@ public class SupervisorService {
     @Transactional
     public Map<String, Object> submitMerging(MergingRequest request) {
         return enhancedMergingService.processEnhancedMerging(request);
+    }
+
+    /**
+     * Get active workers at a specific operation (NEW - multi-employee tracking)
+     * Returns list of employees currently assigned to bins at the specified operation
+     */
+    public List<Map<String, Object>> getActiveWorkersAtOperation(Long operationId) {
+        List<Map<String, Object>> workers = new ArrayList<>();
+        
+        try {
+            System.out.println("[SUPERVISOR] Getting active workers for operation " + operationId);
+            
+            // === APPROACH 1: Check temp_active_assignments (live assignments) ===
+            List<Bin> binsAtOperation = binRepository.findAll().stream()
+                .filter(bin -> bin.getCurrentOperationId() != null && bin.getCurrentOperationId().equals(operationId))
+                .collect(Collectors.toList());
+            
+            System.out.println("[SUPERVISOR] Found " + binsAtOperation.size() + " bins at operation " + operationId);
+            
+            // For each bin, find active assignments from temp_active_assignments
+            for (Bin bin : binsAtOperation) {
+                String trayQr = bin.getQrCode();
+                System.out.println("[SUPERVISOR] Checking bin: " + trayQr);
+                
+                // Find any active assignment for this tray
+                // Include both "assigned" (active work) and "completed" (between bundles - continuous tracking)
+                List<TempActiveAssignment> assignments = tempActiveAssignmentRepository.findAll().stream()
+                    .filter(a -> a.getTrayQr() != null && a.getTrayQr().equals(trayQr))
+                    .filter(a -> "assigned".equalsIgnoreCase(a.getStatus()) || "completed".equalsIgnoreCase(a.getStatus()))
+                    .collect(Collectors.toList());
+                
+                if (!assignments.isEmpty()) {
+                    TempActiveAssignment assignment = assignments.get(0);
+                    System.out.println("[SUPERVISOR] Found temp assignment for tray " + trayQr + " with empIds: " + assignment.getEmpIds());
+                    
+                    // Parse employees from this assignment
+                    if (assignment.getEmpIds() != null && !assignment.getEmpIds().trim().isEmpty()) {
+                        String empIdsJson = assignment.getEmpIds();
+                        String[] empIdStrs = empIdsJson.replaceAll("[\\[\\]\\s]", "").split(",");
+                        
+                        for (String empIdStr : empIdStrs) {
+                            try {
+                                Long empId = Long.parseLong(empIdStr.trim());
+                                String employeeName = fetchEmployeeName(empId);
+                                
+                                Map<String, Object> worker = new HashMap<>();
+                                worker.put("employeeId", empId);
+                                worker.put("employeeName", employeeName);
+                                worker.put("trayQr", trayQr);
+                                worker.put("machineQr", assignment.getMachineQr());
+                                worker.put("startTime", assignment.getStartTime());
+                                workers.add(worker);
+                                System.out.println("[SUPERVISOR] Added worker from temp: " + empId + " (" + employeeName + ")");
+                            } catch (NumberFormatException e) {
+                                System.out.println("[SUPERVISOR] Failed to parse employee ID: " + empIdStr);
+                            }
+                        }
+                    } else if (assignment.getEmpId() != null) {
+                        Long empId = assignment.getEmpId();
+                        String employeeName = fetchEmployeeName(empId);
+                        
+                        Map<String, Object> worker = new HashMap<>();
+                        worker.put("employeeId", empId);
+                        worker.put("employeeName", employeeName);
+                        worker.put("trayQr", trayQr);
+                        worker.put("machineQr", assignment.getMachineQr());
+                        worker.put("startTime", assignment.getStartTime());
+                        workers.add(worker);
+                        System.out.println("[SUPERVISOR] Added single worker from temp: " + empId + " (" + employeeName + ")");
+                    }
+                }
+            }
+            
+            // === APPROACH 2: Check wiptracking for today (continuous tracking) ===
+            // If no workers found in temp_active_assignments, check wiptracking with today's date
+            if (workers.isEmpty()) {
+                System.out.println("[SUPERVISOR] No workers in temp_active_assignments, checking wiptracking...");
+                
+                java.time.LocalDate today = java.time.LocalDate.now();
+                java.time.LocalDateTime startOfDay = today.atStartOfDay();
+                java.time.LocalDateTime endOfDay = today.atTime(23, 59, 59);
+                
+                List<WipTracking> todayWipRecords = wipTrackingRepository.findAll().stream()
+                    .filter(w -> w.getOperationId() != null && w.getOperationId().equals(operationId))
+                    .filter(w -> w.getStartTime() != null)
+                    .filter(w -> w.getStartTime().isAfter(startOfDay) && w.getStartTime().isBefore(endOfDay))
+                    .filter(w -> w.getOperatorId() != null)
+                    // Include both IN_PROGRESS and COMPLETED records (continuous tracking)
+                    .filter(w -> "IN_PROGRESS".equalsIgnoreCase(w.getStatus()) || "COMPLETED".equalsIgnoreCase(w.getStatus()) || "Completed".equalsIgnoreCase(w.getStatus()))
+                    .collect(Collectors.toList());
+                
+                System.out.println("[SUPERVISOR] Found " + todayWipRecords.size() + " WIP records for operation " + operationId + " today");
+                
+                // Get distinct operators from today's WIP records
+                Set<Long> distinctOperators = todayWipRecords.stream()
+                    .map(WipTracking::getOperatorId)
+                    .filter(opId -> opId != null)
+                    .collect(Collectors.toSet());
+                
+                System.out.println("[SUPERVISOR] Found " + distinctOperators.size() + " distinct operators today at operation " + operationId);
+                
+                for (Long empId : distinctOperators) {
+                    String employeeName = fetchEmployeeName(empId);
+                    
+                    // Get latest record for this operator at this operation
+                    WipTracking latestRecord = todayWipRecords.stream()
+                        .filter(w -> w.getOperatorId().equals(empId))
+                        .sorted((a, b) -> b.getStartTime().compareTo(a.getStartTime()))
+                        .findFirst()
+                        .orElse(null);
+                    
+                    Map<String, Object> worker = new HashMap<>();
+                    worker.put("employeeId", empId);
+                    worker.put("employeeName", employeeName);
+                    worker.put("operationId", operationId);
+                    if (latestRecord != null) {
+                        worker.put("startTime", latestRecord.getStartTime());
+                        worker.put("binId", latestRecord.getBinId());
+                    }
+                    workers.add(worker);
+                    System.out.println("[SUPERVISOR] Added worker from wiptracking: " + empId + " (" + employeeName + ")");
+                }
+            }
+            
+            System.out.println("[SUPERVISOR] Returning " + workers.size() + " active workers at operation " + operationId);
+        } catch (Exception e) {
+            System.out.println("[SUPERVISOR] Error fetching active workers: " + e.getMessage());
+            e.printStackTrace();
+        }
+        
+        return workers;
+    }
+
+    /**
+     * Fetch employee name from employee table by ID
+     */
+    private String fetchEmployeeName(Long empId) {
+        try {
+            java.util.Optional<com.cutm.smo.models.EmployeeInfo> empOpt = employeeRepository.findById(empId);
+            if (empOpt.isPresent()) {
+                return empOpt.get().getEmpName();
+            }
+        } catch (Exception e) {
+            System.out.println("[SUPERVISOR] Error fetching employee name for ID " + empId + ": " + e.getMessage());
+        }
+        return "Employee " + empId; // Fallback
     }
 }

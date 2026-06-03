@@ -8,10 +8,12 @@ import com.cutm.smo.services.AccessControlService;
 import com.cutm.smo.services.NodeMetricsService;
 import com.cutm.smo.services.ProcessPlanService;
 import com.cutm.smo.services.BreakWindowService;
+import com.cutm.smo.services.EnhancedTrackingService; // NEW: For team assignment lookup
 import com.cutm.smo.util.LoggingUtil;
 import com.cutm.smo.repositories.BinRepository;
 import com.cutm.smo.repositories.WipTrackingRepository;
 import com.cutm.smo.repositories.BinAssignmentHistoryRepository;
+import com.cutm.smo.repositories.EmployeeRepository;
 import com.cutm.smo.repository.OrderRepository;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.server.ResponseStatusException;
@@ -36,10 +38,15 @@ public class ProcessPlanController {
     private final BinAssignmentHistoryRepository binAssignmentHistoryRepository;
     private final OrderRepository orderRepository;
     private final BreakWindowService breakWindowService;
+    private final EnhancedTrackingService enhancedTrackingService; // NEW: For team assignment lookup
+    private final com.cutm.smo.repositories.TempActiveAssignmentRepository tempActiveAssignmentRepository; // NEW: For direct queries
+    private final EmployeeRepository employeeRepository; // NEW: For fetching employee names
 
     public ProcessPlanController(ProcessPlanService processPlanService, AccessControlService accessControlService, NodeMetricsService nodeMetricsService,
             BinRepository binRepository, WipTrackingRepository wipTrackingRepository, BinAssignmentHistoryRepository binAssignmentHistoryRepository, OrderRepository orderRepository,
-            BreakWindowService breakWindowService) {
+            BreakWindowService breakWindowService, EnhancedTrackingService enhancedTrackingService, 
+            com.cutm.smo.repositories.TempActiveAssignmentRepository tempActiveAssignmentRepository,
+            EmployeeRepository employeeRepository) {
         this.processPlanService = processPlanService;
         this.accessControlService = accessControlService;
         this.nodeMetricsService = nodeMetricsService;
@@ -48,6 +55,9 @@ public class ProcessPlanController {
         this.binAssignmentHistoryRepository = binAssignmentHistoryRepository;
         this.orderRepository = orderRepository;
         this.breakWindowService = breakWindowService;
+        this.enhancedTrackingService = enhancedTrackingService; // NEW
+        this.tempActiveAssignmentRepository = tempActiveAssignmentRepository; // NEW
+        this.employeeRepository = employeeRepository; // NEW
     }
 
     @PostMapping("/draft")
@@ -412,12 +422,59 @@ public class ProcessPlanController {
                 .distinct()
                 .count();
             
-            // Count active operators (distinct operators working on this operation)
-            long activeOperators = wipList.stream()
-                .filter(wip -> "IN_PROGRESS".equals(((com.cutm.smo.models.WipTracking)wip).getStatus()))
-                .map(wip -> ((com.cutm.smo.models.WipTracking)wip).getOperatorId())
-                .distinct()
-                .count();
+            // Count operators from temp_active_assignments (live assignments - PRIORITY)
+            int activeOperatorsFromTemp = 0;
+            for (Object binObj : activeBinsList) {
+                com.cutm.smo.models.Bin bin = (com.cutm.smo.models.Bin) binObj;
+                String trayQr = bin.getQrCode();
+                
+                // Find active assignment for this tray (query directly without findTeamAssignment)
+                // Include both "assigned" (active work) and "completed" (between bundles - continuous tracking)
+                try {
+                    List<com.cutm.smo.models.TempActiveAssignment> assignments = 
+                        tempActiveAssignmentRepository.findAll().stream()
+                        .filter(a -> a.getTrayQr() != null && a.getTrayQr().equals(trayQr))
+                        .filter(a -> "assigned".equalsIgnoreCase(a.getStatus()) || "completed".equalsIgnoreCase(a.getStatus()))
+                        .collect(java.util.stream.Collectors.toList());
+                    
+                    if (!assignments.isEmpty()) {
+                        com.cutm.smo.models.TempActiveAssignment assignment = assignments.get(0);
+                        
+                        // Check if this is a team assignment with empIds JSON
+                        if (assignment.getEmpIds() != null && !assignment.getEmpIds().trim().isEmpty()) {
+                            // Parse employee count from JSON
+                            String empIdsJson = assignment.getEmpIds();
+                            String[] empIdStrs = empIdsJson.replaceAll("[\\[\\]\\s]", "").split(",");
+                            activeOperatorsFromTemp += empIdStrs.length;
+                            log.debug("Found team assignment for tray {} with {} operators", trayQr, empIdStrs.length);
+                        } else {
+                            // Single employee assignment
+                            activeOperatorsFromTemp += 1;
+                            log.debug("Found single assignment for tray {}", trayQr);
+                        }
+                    }
+                } catch (Exception e) {
+                    log.warn("Error checking temp assignment for tray {}: {}", trayQr, e.getMessage());
+                }
+            }
+            
+            // Only use wiptracking as fallback if no temp_active_assignments exist
+            long activeOperatorsFromWip = 0;
+            if (activeOperatorsFromTemp == 0) {
+                activeOperatorsFromWip = wipList.stream()
+                    .filter(wip -> {
+                        String status = ((com.cutm.smo.models.WipTracking)wip).getStatus();
+                        return "IN_PROGRESS".equalsIgnoreCase(status) || "COMPLETED".equalsIgnoreCase(status) || "Completed".equalsIgnoreCase(status);
+                    })
+                    .map(wip -> ((com.cutm.smo.models.WipTracking)wip).getOperatorId())
+                    .filter(opId -> opId != null) // Filter out null operator IDs
+                    .distinct()
+                    .count();
+                log.debug("No temp assignments found, using wiptracking fallback: {} operators", activeOperatorsFromWip);
+            }
+            
+            long activeOperators = activeOperatorsFromWip + activeOperatorsFromTemp;
+            log.debug("Total active operators: {} (from WIP: {}, from temp: {})", activeOperators, activeOperatorsFromWip, activeOperatorsFromTemp);
             
             // Determine operation status based on WIP data and order status
             // If the order is COMPLETED, all operations should be COMPLETED
@@ -478,47 +535,86 @@ public class ProcessPlanController {
             response.put("last_action_time", lastActionTime);
             response.put("estimated_time", operation.getStandardTime() != null ? operation.getStandardTime() + " min" : "N/A");
 
-            // ── Actual timing from wiptracking ──────────────────────────────
-            // Find the most recent completed wiptracking record for this operation
-            // to show real start/end times and actual duration.
+            // Tray Quantity: sum of qty from all active bins at this operation
+            int totalTrayQuantity = activeBinsList.stream()
+                .mapToInt(bin -> {
+                    Integer qty = ((com.cutm.smo.models.Bin) bin).getQty();
+                    return qty != null ? qty : 0;
+                })
+                .sum();
+            response.put("tray_quantity", totalTrayQuantity);
+
+            // ── Actual timing - PRIORITY: Show CURRENT active assignment timing (NEW FIX) ──────────────────────────────
+            // 1. First check for ACTIVE temp_active_assignments (ongoing work)
+            // 2. Fallback to most recent COMPLETED wiptracking (past work)
             java.time.LocalDateTime actualStart = null;
             java.time.LocalDateTime actualEnd = null;
             String actualDuration = "N/A";
             String actualStartStr = "N/A";
             String actualEndStr = "N/A";
+            boolean foundActiveAssignment = false;
 
-            List<com.cutm.smo.models.WipTracking> wipRecords = wipTrackingRepository.findAll().stream()
-                .filter(w -> w.getOperationId() != null && w.getOperationId().equals(operationId))
-                .filter(w -> w.getStartTime() != null)
-                .sorted((a, b) -> {
-                    if (a.getEndTime() == null && b.getEndTime() == null) return 0;
-                    if (a.getEndTime() == null) return 1;
-                    if (b.getEndTime() == null) return -1;
-                    return b.getEndTime().compareTo(a.getEndTime());
-                })
-                .limit(1)
-                .toList();
-
-            if (!wipRecords.isEmpty()) {
-                com.cutm.smo.models.WipTracking latest = wipRecords.get(0);
-                actualStart = latest.getStartTime();
-                actualEnd = latest.getEndTime();
-                if (actualStart != null) {
-                    actualStartStr = actualStart.toString().replace("T", " ").substring(0, Math.min(19, actualStart.toString().length()));
+            // Check for active assignments at this operation
+            for (Object binObj : activeBinsList) {
+                com.cutm.smo.models.Bin bin = (com.cutm.smo.models.Bin) binObj;
+                String trayQr = bin.getQrCode();
+                
+                try {
+                    List<com.cutm.smo.models.TempActiveAssignment> assignments = 
+                        tempActiveAssignmentRepository.findAll().stream()
+                        .filter(a -> a.getTrayQr() != null && a.getTrayQr().equals(trayQr))
+                        .filter(a -> "assigned".equalsIgnoreCase(a.getStatus()))
+                        .collect(java.util.stream.Collectors.toList());
+                    
+                    if (!assignments.isEmpty()) {
+                        com.cutm.smo.models.TempActiveAssignment assignment = assignments.get(0);
+                        actualStart = assignment.getStartTime();
+                        actualEnd = null; // Still in progress
+                        foundActiveAssignment = true;
+                        log.debug("Found active assignment for operation {} with start time: {}", operationId, actualStart);
+                        break;
+                    }
+                } catch (Exception e) {
+                    log.warn("Error checking active assignment timing for tray {}: {}", trayQr, e.getMessage());
                 }
+            }
+
+            // If no active assignment, fall back to most recent COMPLETED wiptracking
+            if (!foundActiveAssignment) {
+                List<com.cutm.smo.models.WipTracking> wipRecords = wipTrackingRepository.findAll().stream()
+                    .filter(w -> w.getOperationId() != null && w.getOperationId().equals(operationId))
+                    .filter(w -> w.getStartTime() != null)
+                    .filter(w -> "COMPLETED".equalsIgnoreCase(w.getStatus())) // Only completed records
+                    .sorted((a, b) -> {
+                        if (a.getEndTime() == null && b.getEndTime() == null) return 0;
+                        if (a.getEndTime() == null) return -1;
+                        if (b.getEndTime() == null) return 1;
+                        return b.getEndTime().compareTo(a.getEndTime());
+                    })
+                    .limit(1)
+                    .toList();
+
+                if (!wipRecords.isEmpty()) {
+                    com.cutm.smo.models.WipTracking latest = wipRecords.get(0);
+                    actualStart = latest.getStartTime();
+                    actualEnd = latest.getEndTime();
+                }
+            }
+
+            // Format timing strings
+            if (actualStart != null) {
+                actualStartStr = actualStart.toString().replace("T", " ").substring(0, Math.min(19, actualStart.toString().length()));
+                
                 if (actualEnd != null) {
+                    // Completed - show end time and final duration
                     actualEndStr = actualEnd.toString().replace("T", " ").substring(0, Math.min(19, actualEnd.toString().length()));
-                    if (actualStart != null) {
-                        long netSeconds = breakWindowService.calculateNetDurationSeconds(actualStart, actualEnd);
-                        actualDuration = breakWindowService.formatDuration(netSeconds);
-                    }
+                    long netSeconds = breakWindowService.calculateNetDurationSeconds(actualStart, actualEnd);
+                    actualDuration = breakWindowService.formatDuration(netSeconds);
                 } else {
-                    // Still in progress — show start time, no end yet
+                    // Still in progress — calculate live duration
                     actualEndStr = "In progress...";
-                    if (actualStart != null) {
-                        long netSeconds = breakWindowService.calculateNetDurationSeconds(actualStart, null);
-                        actualDuration = breakWindowService.formatDuration(netSeconds) + " (ongoing)";
-                    }
+                    long netSeconds = breakWindowService.calculateNetDurationSeconds(actualStart, java.time.LocalDateTime.now());
+                    actualDuration = breakWindowService.formatDuration(netSeconds) + " (ongoing)";
                 }
             }
 
@@ -542,8 +638,90 @@ public class ProcessPlanController {
             response.put("next_operation", nextOperation);
             response.put("next_operation_id", nextOperationId);
             
-            log.info("Operation status retrieved - Operation: {}, Status: {}, Active Bins: {}, WIP Qty: {}, Completed: {}, Next Op: {}", 
-                operation.getName(), status, activeBins, wipQuantity, completedQuantity, nextOperation);
+            // === BUNDLE-WISE TIMING (SAM continuous tracking model) ===
+            List<Map<String, Object>> bundles = new ArrayList<>();
+            
+            // Get all wiptracking records for this operation (each record = 1 bundle cycle)
+            List<com.cutm.smo.models.WipTracking> bundleRecords = wipTrackingRepository.findAll().stream()
+                .filter(w -> w.getOperationId() != null && w.getOperationId().equals(operationId))
+                .filter(w -> w.getStartTime() != null)
+                .sorted((a, b) -> b.getStartTime().compareTo(a.getStartTime())) // Most recent first
+                .collect(java.util.stream.Collectors.toList());
+            
+            log.debug("Found {} bundle records for operation {}", bundleRecords.size(), operationId);
+            
+            for (com.cutm.smo.models.WipTracking bundle : bundleRecords) {
+                Map<String, Object> bundleInfo = new HashMap<>();
+                bundleInfo.put("wip_id", bundle.getWipId());
+                bundleInfo.put("bundle_number", bundles.size() + 1); // 1-indexed bundle number
+                
+                // Get operator name from temp_active_assignments (SAM model)
+                // Operator is linked via tray (bin), not directly in wiptracking
+                Long binId = bundle.getBinId();
+                if (binId != null) {
+                    try {
+                        // Find the bin to get its QR code
+                        java.util.Optional<com.cutm.smo.models.Bin> binOpt = binRepository.findById(binId);
+                        if (binOpt.isPresent()) {
+                            String trayQr = binOpt.get().getQrCode();
+                            bundleInfo.put("tray_qr", trayQr);
+                            
+                            // Find active assignment for this tray
+                            List<com.cutm.smo.models.TempActiveAssignment> assignments = 
+                                tempActiveAssignmentRepository.findAll().stream()
+                                .filter(a -> a.getTrayQr() != null && a.getTrayQr().equals(trayQr))
+                                .filter(a -> "assigned".equalsIgnoreCase(a.getStatus()) || "completed".equalsIgnoreCase(a.getStatus()))
+                                .collect(java.util.stream.Collectors.toList());
+                            
+                            if (!assignments.isEmpty()) {
+                                com.cutm.smo.models.TempActiveAssignment assignment = assignments.get(0);
+                                Long empId = assignment.getEmpId();
+                                String machineQr = assignment.getMachineQr();
+                                
+                                bundleInfo.put("machine_qr", machineQr);
+                                
+                                if (empId != null) {
+                                    try {
+                                        String operatorName = fetchEmployeeName(empId);
+                                        bundleInfo.put("operator_id", empId);
+                                        bundleInfo.put("operator_name", operatorName);
+                                    } catch (Exception nameEx) {
+                                        log.warn("Error fetching employee name for ID {}: {}", empId, nameEx.getMessage());
+                                        bundleInfo.put("operator_id", empId);
+                                        bundleInfo.put("operator_name", "Employee " + empId);
+                                    }
+                                }
+                            }
+                        }
+                    } catch (Exception e) {
+                        log.warn("Error fetching operator for bundle {}: {}", bundle.getWipId(), e.getMessage());
+                    }
+                }
+                
+                bundleInfo.put("quantity", bundle.getQty());
+                String startTimeStr = bundle.getStartTime().toString().replace("T", " ");
+                bundleInfo.put("start_time", startTimeStr.substring(0, Math.min(19, startTimeStr.length())));
+                bundleInfo.put("status", bundle.getStatus());
+                
+                if (bundle.getEndTime() != null) {
+                    String endTimeStr = bundle.getEndTime().toString().replace("T", " ");
+                    bundleInfo.put("end_time", endTimeStr.substring(0, Math.min(19, endTimeStr.length())));
+                    long netSeconds = breakWindowService.calculateNetDurationSeconds(bundle.getStartTime(), bundle.getEndTime());
+                    bundleInfo.put("duration", breakWindowService.formatDuration(netSeconds));
+                    bundleInfo.put("duration_seconds", netSeconds);
+                } else {
+                    bundleInfo.put("end_time", "In progress...");
+                    bundleInfo.put("duration", "Ongoing");
+                    long netSeconds = breakWindowService.calculateNetDurationSeconds(bundle.getStartTime(), java.time.LocalDateTime.now());
+                    bundleInfo.put("duration_seconds", netSeconds);
+                }
+                
+                bundles.add(bundleInfo);
+            }
+            
+            response.put("bundles", bundles);
+            response.put("bundle_count", bundles.size());
+            log.debug("Added {} bundles to response", bundles.size());
             
             long endTime = System.currentTimeMillis();
             LoggingUtil.logPerformance(log, "Get Operation Status", startTime, endTime);
@@ -697,5 +875,76 @@ public class ProcessPlanController {
             LoggingUtil.logPerformance(log, "Add Edge (Failed)", startTime, System.currentTimeMillis());
             throw e;
         }
+    }
+    
+    // Helper method to fetch employee name by ID
+    /// Get active operators count for all operations in a routing (for workflow graph pulsing)
+    @GetMapping("/operations-active-operators")
+    public List<Map<String, Object>> getOperationsActiveOperators(@RequestParam Long routingId) {
+        long startTime = System.currentTimeMillis();
+        try {
+            log.info("[GraphPulse] Fetching active operators for routing {}", routingId);
+            
+            List<Map<String, Object>> result = new ArrayList<>();
+            
+            try {
+                // Get all operations for this routing
+                final var routing = processPlanService.getProcessPlan(routingId);
+                if (routing != null && routing.getOperations() != null) {
+                    // Get actual active operator counts from temp_active_assignments joined with bin
+                    Map<Long, Integer> activeCountMap = new HashMap<>();
+                    try {
+                        List<Object[]> activeCounts = tempActiveAssignmentRepository.countActiveOperatorsByOperation();
+                        for (Object[] row : activeCounts) {
+                            Long opId = ((Number) row[0]).longValue();
+                            int count = ((Number) row[1]).intValue();
+                            activeCountMap.put(opId, count);
+                        }
+                    } catch (Exception countEx) {
+                        log.debug("[GraphPulse] Could not fetch active operator counts: {}", countEx.getMessage());
+                    }
+
+                    for (var op : routing.getOperations()) {
+                        long operationId = op.getOperationId();
+                        int activeOps = activeCountMap.getOrDefault(operationId, 0);
+                        
+                        Map<String, Object> item = new HashMap<>();
+                        item.put("operation_id", operationId);
+                        item.put("active_operators", activeOps);
+                        result.add(item);
+                        
+                        if (activeOps > 0) {
+                            log.info("[GraphPulse] Op {}: {} active operators", operationId, activeOps);
+                        }
+                    }
+                }
+            } catch (Exception serviceEx) {
+                log.warn("[GraphPulse] Service error getting routing {}: {}", routingId, serviceEx.getMessage());
+                // Return empty result on error - let UI handle gracefully
+            }
+            
+            log.info("[GraphPulse] Returning active operators for {} operations", result.size());
+            long endTime = System.currentTimeMillis();
+            LoggingUtil.logPerformance(log, "Get Operations Active Operators", startTime, endTime);
+            return result;
+            
+        } catch (Exception e) {
+            log.error("[GraphPulse] Error fetching active operators for routing {}: {}", routingId, e.getMessage(), e);
+            long endTime = System.currentTimeMillis();
+            LoggingUtil.logPerformance(log, "Get Operations Active Operators (Failed)", startTime, endTime);
+            throw new ResponseStatusException(HttpStatus.OK, "[]"); // Return empty array as JSON
+        }
+    }
+
+    private String fetchEmployeeName(Long empId) {
+        try {
+            java.util.Optional<com.cutm.smo.models.EmployeeInfo> empOpt = employeeRepository.findById(empId);
+            if (empOpt.isPresent()) {
+                return empOpt.get().getEmpName();
+            }
+        } catch (Exception e) {
+            log.warn("Failed to fetch employee name for ID {}: {}", empId, e.getMessage());
+        }
+        return "Employee " + empId;
     }
 }

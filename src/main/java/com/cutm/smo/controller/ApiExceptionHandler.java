@@ -45,8 +45,26 @@ public class ApiExceptionHandler {
     public ResponseEntity<Map<String, Object>> handleDataIntegrity(
             DataIntegrityViolationException ex,
             HttpServletRequest request) {
+        String msg = "Data integrity violation";
+        String cause = ex.getMostSpecificCause().getMessage();
+        if (cause != null) {
+            String c = cause.toLowerCase();
+            if (c.contains("uk_employee_phone") || c.contains("phone")) {
+                msg = "Phone number already exists. Use a different phone number.";
+            } else if (c.contains("email") || c.contains("uk_employee_email")) {
+                msg = "Email address already exists. Use a different email.";
+            } else if (c.contains("emp_id") || c.contains("primary") || c.contains("duplicate entry")) {
+                msg = "Employee ID already exists. Use a different Employee ID.";
+            } else if (c.contains("aadhar")) {
+                msg = "Aadhar number already exists.";
+            } else if (c.contains("pan")) {
+                msg = "PAN card number already exists.";
+            } else if (c.contains("unique") || c.contains("duplicate")) {
+                msg = "A record with this data already exists. Check for duplicate values.";
+            }
+        }
         return ResponseEntity.status(HttpStatus.CONFLICT)
-                .body(body(HttpStatus.CONFLICT, "Data integrity violation", request.getRequestURI()));
+                .body(body(HttpStatus.CONFLICT, msg, request.getRequestURI()));
     }
 
     @ExceptionHandler(JpaSystemException.class)

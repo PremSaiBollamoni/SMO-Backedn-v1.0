@@ -142,4 +142,14 @@ public class SupervisorController {
         Map<String, Object> response = supervisorService.submitMerging(request);
         return ResponseEntity.ok(response);
     }
+
+    /**
+     * Get active workers at an operation (NEW - for multi-employee tracking display)
+     * Returns list of employees currently working at the specified operation
+     */
+    @GetMapping("/active-workers/{operationId}")
+    public ResponseEntity<List<Map<String, Object>>> getActiveWorkers(@PathVariable Long operationId) {
+        List<Map<String, Object>> workers = supervisorService.getActiveWorkersAtOperation(operationId);
+        return ResponseEntity.ok(workers);
+    }
 }

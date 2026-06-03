@@ -2,6 +2,8 @@ package com.cutm.smo.services;
 
 import com.cutm.smo.models.*;
 import com.cutm.smo.repositories.*;
+import com.cutm.smo.repository.InventoryStockRepository;
+import com.cutm.smo.repository.StockMovementRepository;
 import com.cutm.smo.util.LoggingUtil;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;

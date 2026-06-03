@@ -3,12 +3,14 @@ package com.cutm.smo.services;
 import com.cutm.smo.dto.TrackingRequest;
 import com.cutm.smo.models.EmployeeInfo;
 import com.cutm.smo.models.TempActiveAssignment;
+import com.cutm.smo.models.TempEmpQr;
 import com.cutm.smo.repositories.EmployeeRepository;
 import com.cutm.smo.repositories.TempActiveAssignmentRepository;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.util.Optional;
+import java.util.List;
 
 /**
  * Dedicated service for tracking validations
@@ -22,6 +24,9 @@ public class TrackingValidationService {
 
     @Autowired
     private TempActiveAssignmentRepository tempActiveAssignmentRepository;
+
+    @Autowired
+    private com.cutm.smo.repository.TempEmpQrRepository tempEmpQrRepository;
 
     /**
      * Run all basic validations required for both assignment and completion flows
@@ -57,25 +62,29 @@ public class TrackingValidationService {
 
     /**
      * Run assignment-specific validations (only for new assignments)
+     * NOTE: Removed machine/tray uniqueness checks to support team assignments (multiple employees per machine+tray)
      */
     public ValidationResult runAssignmentValidations(TrackingRequest request, Long empId) {
         // Check if employee is already assigned to another machine
-        ValidationResult employeeAssignmentCheck = validateEmployeeNotAlreadyAssigned(empId);
-        if (!employeeAssignmentCheck.isValid()) {
-            return employeeAssignmentCheck;
+        // Updated to support multi-employee scenarios
+        List<Long> employeeIds = request.getEmployeeIds();
+        if (employeeIds != null && !employeeIds.isEmpty()) {
+            for (Long eid : employeeIds) {
+                ValidationResult employeeAssignmentCheck = validateEmployeeNotAlreadyAssigned(eid);
+                if (!employeeAssignmentCheck.isValid()) {
+                    return employeeAssignmentCheck;
+                }
+            }
+        } else {
+            // Fallback: single employee from empId
+            ValidationResult employeeAssignmentCheck = validateEmployeeNotAlreadyAssigned(empId);
+            if (!employeeAssignmentCheck.isValid()) {
+                return employeeAssignmentCheck;
+            }
         }
 
-        // Check if machine is already assigned to another employee
-        ValidationResult machineAssignmentCheck = validateMachineNotAlreadyAssigned(request.getMachineQr());
-        if (!machineAssignmentCheck.isValid()) {
-            return machineAssignmentCheck;
-        }
-
-        // Check if tray is already in use
-        ValidationResult trayAssignmentCheck = validateTrayNotAlreadyAssigned(request.getTrayQr());
-        if (!trayAssignmentCheck.isValid()) {
-            return trayAssignmentCheck;
-        }
+        // Machine/Tray uniqueness checks REMOVED (NEW: support team assignments)
+        // Multiple employees can now work on the same machine+tray simultaneously
 
         // TODO: Add more assignment-specific validation checks here
         // - Check employee skill level for this machine type
@@ -125,12 +134,12 @@ public class TrackingValidationService {
             return ValidationResult.error("Invalid Employee QR - Employee not found");
         }
 
-        // TODO: Add more employee-specific validations
-        // - Check if employee is active
-        // - Check if employee is on current shift
-        // - Check employee permissions for this operation
-        // - Check if employee has required certifications
-        // - Check employee attendance status
+        // NEW: Check if employee has checked in (scanned QR during morning check-in)
+        // Only employees in temp_emp_qrs with ACTIVE status can work
+        List<TempEmpQr> checkedInEmps = tempEmpQrRepository.findByEmployeeIdAndStatus(empId, "ACTIVE");
+        if (checkedInEmps.isEmpty()) {
+            return ValidationResult.error("Employee has not checked in - Please scan your QR during check-in");
+        }
 
         return ValidationResult.success(empId);
     }
@@ -205,16 +214,34 @@ public class TrackingValidationService {
     }
 
     /**
-     * Parse employee ID from employee QR code
+     * Parse employee ID from employee QR code.
+     * Supports formats:
+     *   - "1007"           → plain numeric ID
+     *   - "EMP_1007"       → prefixed numeric ID
+     *   - "EMP-TEMP-004"   → temp QR → resolve via active mapping
+     *   - "EMP-1007"       → dash-prefixed numeric ID
      */
     private Long parseEmployeeId(String employeeQr) {
-        try {
-            // Assuming QR code contains just the employee ID
-            // Adjust this logic based on your actual QR code format
-            return Long.parseLong(employeeQr.trim());
-        } catch (NumberFormatException e) {
-            return null;
+        if (employeeQr == null || employeeQr.trim().isEmpty()) return null;
+        String qr = employeeQr.trim();
+
+        // 1. Plain numeric
+        try { return Long.parseLong(qr); } catch (NumberFormatException ignored) {}
+
+        // 2. EMP_1007 or EMP-1007 format
+        if (qr.toUpperCase().startsWith("EMP_") || qr.toUpperCase().startsWith("EMP-")) {
+            String suffix = qr.substring(4);
+            try { return Long.parseLong(suffix); } catch (NumberFormatException ignored) {}
         }
+
+        // 3. Temp QR — resolve via active mapping in temp_emp_qrs
+        java.util.Optional<com.cutm.smo.models.TempEmpQr> mapping =
+            tempEmpQrRepository.findByQrIdAndStatus(qr, "ACTIVE");
+        if (mapping.isPresent()) {
+            return mapping.get().getEmployeeId();
+        }
+
+        return null;
     }
 
     /**

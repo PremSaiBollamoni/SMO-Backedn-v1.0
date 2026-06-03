@@ -432,4 +432,55 @@ public class HrController {
         hrService.setEmployeeRoles(empId, ids);
         return java.util.Map.of("success", true, "message", "Roles updated successfully");
     }
+
+    // ─── Self-service Profile Endpoints (no activity check) ───
+
+    /**
+     * GET /api/hr/profile/{empId}
+     * Any employee can view their own profile. No activity check required.
+     */
+    @GetMapping("/profile/{empId}")
+    public EmployeeInfo getProfile(@PathVariable Long empId) {
+        return hrService.getEmployeeById(empId)
+                .orElseThrow(() -> new org.springframework.web.server.ResponseStatusException(
+                        org.springframework.http.HttpStatus.NOT_FOUND, "Employee not found"));
+    }
+
+    /**
+     * PUT /api/hr/profile/{empId}
+     * Any employee can update their own profile. No activity check required.
+     */
+    @PutMapping("/profile/{empId}")
+    public java.util.Map<String, Object> updateProfile(
+            @PathVariable Long empId,
+            @RequestBody java.util.Map<String, Object> body) {
+        EmployeeInfo emp = hrService.getEmployeeById(empId)
+                .orElseThrow(() -> new org.springframework.web.server.ResponseStatusException(
+                        org.springframework.http.HttpStatus.NOT_FOUND, "Employee not found"));
+
+        if (body.containsKey("empName")) emp.setEmpName((String) body.get("empName"));
+        if (body.containsKey("email")) emp.setEmail((String) body.get("email"));
+        if (body.containsKey("phone")) emp.setPhone((String) body.get("phone"));
+        if (body.containsKey("address")) emp.setAddress((String) body.get("address"));
+        if (body.containsKey("dob") && body.get("dob") != null) {
+            emp.setDob(java.time.LocalDate.parse((String) body.get("dob")));
+        }
+        if (body.containsKey("bloodGroup")) emp.setBloodGroup((String) body.get("bloodGroup"));
+        if (body.containsKey("emergencyContact")) emp.setEmergencyContact((String) body.get("emergencyContact"));
+        if (body.containsKey("aadharNumber")) emp.setAadharNumber((String) body.get("aadharNumber"));
+        if (body.containsKey("panCardNumber")) emp.setPanCardNumber((String) body.get("panCardNumber"));
+        if (body.containsKey("status")) emp.setStatus((String) body.get("status"));
+
+        hrService.saveEmployee(emp);
+
+        // Update password if provided
+        if (body.containsKey("password") && body.get("password") != null) {
+            String newPassword = (String) body.get("password");
+            if (!newPassword.trim().isEmpty()) {
+                hrService.updatePassword(empId, newPassword);
+            }
+        }
+
+        return java.util.Map.of("success", true, "message", "Profile updated successfully");
+    }
 }
