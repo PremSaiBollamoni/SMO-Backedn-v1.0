@@ -30,7 +30,7 @@ public class EmployeeController {
     private final EmployeeExportService employeeExportService;
 
     @GetMapping("/dashboard")
-    @PreAuthorize("hasAnyRole('HR', 'ADMIN', 'MANAGER')")
+    @PreAuthorize("hasAnyRole('HR', 'MANAGER')")
     public HrDashboardResponse getDashboard() {
         return employeeService.getDashboard();
     }
@@ -38,13 +38,13 @@ public class EmployeeController {
     // ── Employees ────────────────────────────────────────────────────────────
 
     @GetMapping("/employees")
-    @PreAuthorize("hasAnyRole('HR', 'ADMIN', 'MANAGER')")
+    @PreAuthorize("hasAnyRole('HR', 'MANAGER')")
     public List<EmployeeInfo> getAllEmployees() {
         return employeeService.getAllEmployees();
     }
 
     @GetMapping("/employees/{id}")
-    @PreAuthorize("hasAnyRole('HR', 'ADMIN', 'MANAGER')")
+    @PreAuthorize("hasAnyRole('HR', 'MANAGER')")
     public EmployeeInfo getEmployeeById(@PathVariable Long id) {
         verifyEmployeeAccess(id);
         return employeeService.getEmployeeById(id)
@@ -52,7 +52,7 @@ public class EmployeeController {
     }
 
     @PostMapping("/employees")
-    @PreAuthorize("hasAnyRole('HR', 'ADMIN', 'SUPERVISOR')")
+    @PreAuthorize("hasAnyRole('HR', 'SUPERVISOR')")
     public EmployeeInfo createEmployee(
             @RequestParam(required = false, defaultValue = "system") String actorEmpId,
             @RequestBody CreateEmployeeRequest request) {
@@ -60,19 +60,19 @@ public class EmployeeController {
     }
 
     @PutMapping("/employees/{id}")
-    @PreAuthorize("hasAnyRole('HR', 'ADMIN', 'SUPERVISOR')")
+    @PreAuthorize("hasAnyRole('HR', 'SUPERVISOR')")
     public EmployeeInfo updateEmployee(@PathVariable Long id, @RequestBody EmployeeInfo employee) {
         return employeeService.updateEmployee(id, employee);
     }
 
     @DeleteMapping("/employees/{id}")
-    @PreAuthorize("hasAnyRole('HR', 'ADMIN')")
+    @PreAuthorize("hasAnyRole('HR')")
     public void deleteEmployee(@PathVariable Long id) {
         employeeService.deleteEmployee(id);
     }
 
     @DeleteMapping("/employees")
-    @PreAuthorize("hasAnyRole('HR', 'ADMIN')")
+    @PreAuthorize("hasAnyRole('HR')")
     public void deleteEmployees(@RequestBody Map<String, List<String>> body) {
         List<String> ids = body.get("empIds");
         if (ids == null || ids.isEmpty())
@@ -81,26 +81,26 @@ public class EmployeeController {
     }
 
     @GetMapping("/employees/export/data")
-    @PreAuthorize("hasAnyRole('HR', 'ADMIN')")
+    @PreAuthorize("hasAnyRole('HR')")
     public List<EmployeeExportDto> exportEmployees() {
         return employeeExportService.getEmployeesForExport();
     }
 
     @GetMapping("/login/{empId}")
-    @PreAuthorize("hasAnyRole('HR', 'ADMIN')")
+    @PreAuthorize("hasAnyRole('HR')")
     public EmployeeLogin getLogin(@PathVariable Long empId) {
         return loginService.getLoginById(empId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Login not found"));
     }
 
     @PostMapping("/login")
-    @PreAuthorize("hasAnyRole('HR', 'ADMIN')")
+    @PreAuthorize("hasAnyRole('HR')")
     public EmployeeLogin createLogin(@RequestBody EmployeeLogin login) {
         return loginService.createLogin(login);
     }
 
     @PutMapping("/login/{empId}")
-    @PreAuthorize("hasAnyRole('HR', 'ADMIN')")
+    @PreAuthorize("hasAnyRole('HR')")
     public EmployeeLogin updateLogin(@PathVariable Long empId, @RequestBody EmployeeLogin login) {
         return loginService.updateLogin(empId, login);
     }

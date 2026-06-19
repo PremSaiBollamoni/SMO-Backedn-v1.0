@@ -23,28 +23,28 @@ public class RoleController {
     private final RoleService roleService;
 
     @GetMapping("/roles")
-    @PreAuthorize("hasAnyRole('HR', 'ADMIN')")
+    @PreAuthorize("hasAnyRole('HR')")
     public List<Role> getAllRoles() {
         log.debug("Fetching all roles");
         return roleService.getAllRoles();
     }
 
     @PostMapping("/roles")
-    @PreAuthorize("hasRole('ADMIN')")
+    @PreAuthorize("hasAnyRole('HR')")
     public Role createRole(@RequestBody CreateRoleRequest request) {
         log.info("Creating new role: {}", request.getRoleName());
         return roleService.createRole(request);
     }
 
     @DeleteMapping("/roles/{id}")
-    @PreAuthorize("hasRole('ADMIN')")
+    @PreAuthorize("hasAnyRole('HR')")
     public void deleteRole(@PathVariable Long id) {
         log.info("Deleting role: {}", id);
         roleService.deleteRole(id);
     }
 
     @DeleteMapping("/roles")
-    @PreAuthorize("hasRole('ADMIN')")
+    @PreAuthorize("hasAnyRole('HR')")
     public void deleteRoles(@RequestBody Map<String, List<Integer>> body) {
         List<Integer> ids = body.get("roleIds");
         if (ids == null || ids.isEmpty()) {
@@ -55,14 +55,14 @@ public class RoleController {
     }
 
     @GetMapping("/employees/{empId}/roles")
-    @PreAuthorize("hasAnyRole('HR', 'ADMIN')")
+    @PreAuthorize("hasAnyRole('HR')")
     public List<Map<String, Object>> getEmployeeRoles(@PathVariable Long empId) {
         log.debug("Fetching roles for employee: {}", empId);
         return roleService.getEmployeeRoles(empId);
     }
 
     @PutMapping("/employees/{empId}/roles")
-    @PreAuthorize("hasRole('ADMIN')")
+    @PreAuthorize("hasAnyRole('HR')")
     public Map<String, Object> setEmployeeRoles(
             @PathVariable Long empId,
             @RequestBody Map<String, Object> body) {

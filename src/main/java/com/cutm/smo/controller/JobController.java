@@ -47,4 +47,9 @@ public class JobController {
     public List<ActiveJobDto> getActiveJobsByStation(@PathVariable Long wsId) {
         return jobService.getActiveJobsByStation(wsId);
     }
+
+    @GetMapping
+    public List<ActiveJobDto> getAllJobs() {
+        return jobService.getAllJobs();
+    }
 }

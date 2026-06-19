@@ -28,7 +28,7 @@ public class ImportController {
     private final WorkstationRepository workstationRepo;
 
     @PostMapping("/upload")
-    @PreAuthorize("hasAnyRole('ADMIN')")
+    @PreAuthorize("hasAnyRole('HR', 'SUPERVISOR')")
     public ImportResult uploadExcel(@RequestParam("file") MultipartFile file) throws Exception {
         log.info("Excel file upload started");
         if (file.isEmpty()) {

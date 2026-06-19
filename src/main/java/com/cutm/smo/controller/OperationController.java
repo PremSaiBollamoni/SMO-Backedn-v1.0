@@ -29,7 +29,7 @@ public class OperationController {
     private final OperationRepository operationRepository;
 
     @GetMapping
-    @PreAuthorize("hasAnyRole('HR', 'ADMIN', 'PROCESS_PLANNER', 'SUPERVISOR')")
+    @PreAuthorize("hasAnyRole('HR', 'PROCESS_PLANNER', 'SUPERVISOR')")
     @io.swagger.v3.oas.annotations.Operation(summary = "List all active operations", description = "Get all ACTIVE operations sorted by sequence number")
     @ApiResponse(responseCode = "200", description = "Operations list retrieved successfully")
     public List<Operation> getActive() {
@@ -38,7 +38,7 @@ public class OperationController {
     }
 
     @PostMapping
-    @PreAuthorize("hasAnyRole('ADMIN')")
+    @PreAuthorize("hasAnyRole('HR', 'SUPERVISOR')")
     @io.swagger.v3.oas.annotations.Operation(summary = "Create new operation", description = "Create a new manufacturing operation with SAM and skill grade")
     @ApiResponses(value = {
         @ApiResponse(responseCode = "200", description = "Operation created successfully"),

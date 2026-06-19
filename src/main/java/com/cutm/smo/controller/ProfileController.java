@@ -27,7 +27,7 @@ public class ProfileController {
      * Get profile - user can view their own profile or HR/Admin can view any profile
      */
     @GetMapping("/{empId}")
-    @PreAuthorize("hasAnyRole('HR', 'ADMIN') || #empId == authentication.principal")
+    @PreAuthorize("hasAnyRole('HR') || #empId == authentication.principal")
     public EmployeeInfo getProfile(@PathVariable Long empId) {
         // IDOR Protection: Verify the requesting user has permission
         Long currentEmpId = getCurrentEmpId();
@@ -43,7 +43,7 @@ public class ProfileController {
      * Update profile - user can only update their own profile
      */
     @PutMapping("/{empId}")
-    @PreAuthorize("hasAnyRole('HR', 'ADMIN') || #empId == authentication.principal")
+    @PreAuthorize("hasAnyRole('HR') || #empId == authentication.principal")
     public Map<String, Object> updateProfile(
             @PathVariable Long empId,
             @RequestBody Map<String, Object> body) {
@@ -93,10 +93,12 @@ public class ProfileController {
     }
 
     /**
-     * Helper method to check if current user has HR role.
+     * Helper method to check if current user has HR or ADMIN role.
      */
     private boolean hasHRRole() {
-        String role = (String) SecurityContextHolder.getContext().getAuthentication().getDetails();
-        return role != null && (role.equalsIgnoreCase("HR") || role.equalsIgnoreCase("ADMIN"));
+        var auth = SecurityContextHolder.getContext().getAuthentication();
+        if (auth == null) return false;
+        return auth.getAuthorities().stream()
+                .anyMatch(a -> a.getAuthority().equals("ROLE_HR") || a.getAuthority().equals("ROLE_ADMIN"));
     }
 }

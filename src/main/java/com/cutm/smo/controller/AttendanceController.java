@@ -23,7 +23,7 @@ public class AttendanceController {
     private final AttendanceService attendanceService;
 
     @PostMapping("/map-qr")
-    @PreAuthorize("hasAnyRole('HR', 'ADMIN', 'SUPERVISOR')")
+    @PreAuthorize("hasAnyRole('HR', 'SUPERVISOR')")
     public ResponseEntity<Map<String, Object>> mapQr(@RequestBody MapQrRequest req) {
         log.debug("Mapping QR for employee: {}", req.getEmpId());
         var mapping = attendanceService.mapQr(req);
@@ -36,7 +36,7 @@ public class AttendanceController {
     }
 
     @GetMapping("/resolve-qr")
-    @PreAuthorize("hasAnyRole('OPERATOR', 'SUPERVISOR', 'HR', 'ADMIN')")
+    @PreAuthorize("hasAnyRole('OPERATOR', 'SUPERVISOR', 'HR')")
     public ResponseEntity<Map<String, Object>> resolveQr(@RequestParam String qrToken) {
         log.debug("Resolving QR token");
         Long empId = attendanceService.resolveQrToEmployee(qrToken);
@@ -58,14 +58,14 @@ public class AttendanceController {
     }
 
     @GetMapping("/today")
-    @PreAuthorize("hasAnyRole('HR', 'ADMIN', 'SUPERVISOR')")
+    @PreAuthorize("hasAnyRole('HR', 'SUPERVISOR')")
     public List<AttendanceRecordDto> getTodayAttendance() {
         log.debug("Fetching today's attendance");
         return attendanceService.getTodayAttendance();
     }
 
     @PostMapping("/free-qrs")
-    @PreAuthorize("hasAnyRole('HR', 'ADMIN')")
+    @PreAuthorize("hasAnyRole('HR')")
     public ResponseEntity<Map<String, Object>> freeAllQrs() {
         log.info("Freeing all QR mappings");
         int count = attendanceService.freeAllQrs();
