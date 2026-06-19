@@ -4,9 +4,11 @@ import com.cutm.smo.dto.LoginRequest;
 import com.cutm.smo.dto.LoginResponse;
 import com.cutm.smo.models.EmployeeInfo;
 import com.cutm.smo.models.EmployeeLogin;
+import com.cutm.smo.models.LoginAuditLog;
 import com.cutm.smo.repositories.EmployeeInfoRepository;
 import com.cutm.smo.repositories.EmployeeLoginRepository;
 import com.cutm.smo.repositories.EmployeeRoleRepository;
+import com.cutm.smo.repositories.LoginAuditLogRepository;
 import com.cutm.smo.repositories.RoleRepository;
 import com.cutm.smo.security.JwtTokenProvider;
 import com.cutm.smo.security.PasswordUtil;
@@ -16,6 +18,9 @@ import org.springframework.http.HttpStatus;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.web.server.ResponseStatusException;
+import jakarta.servlet.http.HttpServletRequest;
+import org.springframework.web.context.request.RequestContextHolder;
+import org.springframework.web.context.request.ServletRequestAttributes;
 
 @Slf4j
 @Service
@@ -26,19 +31,22 @@ public class AuthService {
     private final RoleRepository roleRepository;
     private final JwtTokenProvider jwtTokenProvider;
     private final PasswordEncoder passwordEncoder;
+    private final LoginAuditLogRepository loginAuditLogRepository;
 
     public AuthService(EmployeeLoginRepository employeeLoginRepository,
                        EmployeeInfoRepository employeeInfoRepository,
                        EmployeeRoleRepository employeeRoleRepository,
                        RoleRepository roleRepository,
                        JwtTokenProvider jwtTokenProvider,
-                       PasswordEncoder passwordEncoder) {
+                       PasswordEncoder passwordEncoder,
+                       LoginAuditLogRepository loginAuditLogRepository) {
         this.employeeLoginRepository = employeeLoginRepository;
         this.employeeInfoRepository = employeeInfoRepository;
         this.employeeRoleRepository = employeeRoleRepository;
         this.roleRepository = roleRepository;
         this.jwtTokenProvider = jwtTokenProvider;
         this.passwordEncoder = passwordEncoder;
+        this.loginAuditLogRepository = loginAuditLogRepository;
     }
 
     public LoginResponse login(LoginRequest request) {
@@ -152,6 +160,9 @@ public class AuthService {
             // Attach all roles so Flutter can show role picker if needed
             response.setAllRoles(allRoles);
 
+            // Log successful login to database
+            logSuccessfulLogin(empId);
+
             long endTime = System.currentTimeMillis();
             LoggingUtil.logAuthenticationAttempt(log, request.getLoginid(), true, null);
             LoggingUtil.logPerformance(log, "Authentication", startTime, endTime);
@@ -187,5 +198,66 @@ public class AuthService {
             log.error("Unexpected error while parsing Employee ID: {}", value, ex);
             throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Invalid credentials");
         }
+    }
+
+    // Log successful login to database
+    private void logSuccessfulLogin(Long empId) {
+        try {
+            HttpServletRequest request = getHttpServletRequest();
+            String ipAddress = getClientIpAddress(request);
+            String userAgent = request != null ? request.getHeader("User-Agent") : "Unknown";
+
+            LoginAuditLog auditLog = new LoginAuditLog(empId, ipAddress, userAgent);
+            loginAuditLogRepository.save(auditLog);
+            log.debug("Login audit logged for employee: {}", empId);
+        } catch (Exception e) {
+            log.warn("Failed to log login audit for employee: {}", empId, e);
+            // Don't fail the login if audit logging fails
+        }
+    }
+
+    // Log failed login to database
+    public void logFailedLogin(Long empId, String failureReason, Integer attemptCount) {
+        try {
+            HttpServletRequest request = getHttpServletRequest();
+            String ipAddress = getClientIpAddress(request);
+            String userAgent = request != null ? request.getHeader("User-Agent") : "Unknown";
+            String status = attemptCount >= 5 ? "LOCKED" : "FAILED";
+
+            LoginAuditLog auditLog = new LoginAuditLog(empId, status, failureReason, attemptCount, ipAddress, userAgent);
+            loginAuditLogRepository.save(auditLog);
+            log.debug("Failed login audit logged for employee: {} - Reason: {}", empId, failureReason);
+        } catch (Exception e) {
+            log.warn("Failed to log failed login audit for employee: {}", empId, e);
+        }
+    }
+
+    // Helper method to get HttpServletRequest
+    private HttpServletRequest getHttpServletRequest() {
+        try {
+            ServletRequestAttributes attributes = (ServletRequestAttributes) RequestContextHolder.getRequestAttributes();
+            return attributes != null ? attributes.getRequest() : null;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    // Helper method to get client IP address
+    private String getClientIpAddress(HttpServletRequest request) {
+        if (request == null) {
+            return "Unknown";
+        }
+
+        String xForwardedFor = request.getHeader("X-Forwarded-For");
+        if (xForwardedFor != null && !xForwardedFor.isEmpty()) {
+            return xForwardedFor.split(",")[0];
+        }
+
+        String xRealIp = request.getHeader("X-Real-IP");
+        if (xRealIp != null && !xRealIp.isEmpty()) {
+            return xRealIp;
+        }
+
+        return request.getRemoteAddr();
     }
 }
