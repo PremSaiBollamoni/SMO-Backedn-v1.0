@@ -8,6 +8,12 @@ public class LoginResponse {
     private String employeeName;
     private String empId;
     private String activities;
+    /** JWT Access Token for API authentication */
+    private String token;
+    /** JWT Refresh Token for obtaining new access tokens */
+    private String refreshToken;
+    /** Token expiration time in milliseconds */
+    private Long tokenExpiresIn;
     /** All roles assigned to this employee. Empty if only one role. */
     private List<Map<String, Object>> allRoles;
 
@@ -34,6 +40,12 @@ public class LoginResponse {
     public void setEmpId(String empId) { this.empId = empId; }
     public String getActivities() { return activities; }
     public void setActivities(String activities) { this.activities = activities; }
+    public String getToken() { return token; }
+    public void setToken(String token) { this.token = token; }
+    public String getRefreshToken() { return refreshToken; }
+    public void setRefreshToken(String refreshToken) { this.refreshToken = refreshToken; }
+    public Long getTokenExpiresIn() { return tokenExpiresIn; }
+    public void setTokenExpiresIn(Long tokenExpiresIn) { this.tokenExpiresIn = tokenExpiresIn; }
     public List<Map<String, Object>> getAllRoles() { return allRoles; }
     public void setAllRoles(List<Map<String, Object>> allRoles) { this.allRoles = allRoles; }
 }

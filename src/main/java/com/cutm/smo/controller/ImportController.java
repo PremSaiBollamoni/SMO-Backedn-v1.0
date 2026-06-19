@@ -9,6 +9,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.poi.ss.usermodel.*;
 import org.apache.poi.ss.usermodel.WorkbookFactory;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 
@@ -27,7 +28,13 @@ public class ImportController {
     private final WorkstationRepository workstationRepo;
 
     @PostMapping("/upload")
+    @PreAuthorize("hasAnyRole('ADMIN')")
     public ImportResult uploadExcel(@RequestParam("file") MultipartFile file) throws Exception {
+        log.info("Excel file upload started");
+        if (file.isEmpty()) {
+            log.warn("Empty file upload attempted");
+            throw new IllegalArgumentException("File cannot be empty");
+        }
         Workbook workbook = WorkbookFactory.create(file.getInputStream());
         Sheet sheet = workbook.getSheetAt(0);
         DataFormatter fmt = new DataFormatter();

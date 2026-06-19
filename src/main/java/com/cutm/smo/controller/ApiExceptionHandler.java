@@ -4,6 +4,7 @@ import java.time.LocalDateTime;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
+import lombok.extern.slf4j.Slf4j;
 import org.hibernate.id.IdentifierGenerationException;
 import org.hibernate.exception.ConstraintViolationException;
 import org.springframework.dao.DataIntegrityViolationException;
@@ -19,6 +20,7 @@ import org.springframework.web.server.ResponseStatusException;
 
 import jakarta.servlet.http.HttpServletRequest;
 
+@Slf4j
 @RestControllerAdvice
 public class ApiExceptionHandler {
 
@@ -27,6 +29,7 @@ public class ApiExceptionHandler {
             ResponseStatusException ex,
             HttpServletRequest request) {
         HttpStatus status = HttpStatus.valueOf(ex.getStatusCode().value());
+        log.warn("ResponseStatusException: status={}, reason={}, path={}", status, ex.getReason(), request.getRequestURI());
         return ResponseEntity.status(status).body(body(status, ex.getReason(), request.getRequestURI()));
     }
 
@@ -37,6 +40,8 @@ public class ApiExceptionHandler {
             MethodArgumentTypeMismatchException.class
     })
     public ResponseEntity<Map<String, Object>> handleBadRequest(Exception ex, HttpServletRequest request) {
+        log.warn("BadRequest exception: type={}, path={}", ex.getClass().getSimpleName(), request.getRequestURI());
+        log.debug("BadRequest details: {}", ex.getMessage());
         return ResponseEntity.status(HttpStatus.BAD_REQUEST)
                 .body(body(HttpStatus.BAD_REQUEST, "Invalid request payload or parameters", request.getRequestURI()));
     }
@@ -45,6 +50,8 @@ public class ApiExceptionHandler {
     public ResponseEntity<Map<String, Object>> handleDataIntegrity(
             DataIntegrityViolationException ex,
             HttpServletRequest request) {
+        log.warn("DataIntegrityViolationException: path={}", request.getRequestURI());
+        log.debug("DataIntegrity details: {}", ex.getMessage());
         String msg = "Data integrity violation";
         String cause = ex.getMostSpecificCause().getMessage();
         if (cause != null) {
@@ -71,6 +78,8 @@ public class ApiExceptionHandler {
     public ResponseEntity<Map<String, Object>> handleJpaSystem(
             JpaSystemException ex,
             HttpServletRequest request) {
+        log.warn("JpaSystemException: path={}", request.getRequestURI());
+        log.debug("JpaSystemException details: {}", ex.getMessage());
         Throwable root = ex.getMostSpecificCause();
         if (root instanceof IdentifierGenerationException
                 || ex.getMessage().contains("must be manually assigned")
@@ -89,10 +98,10 @@ public class ApiExceptionHandler {
 
     @ExceptionHandler(Exception.class)
     public ResponseEntity<Map<String, Object>> handleUnexpected(Exception ex, HttpServletRequest request) {
-        // Log the actual exception for debugging
-        ex.printStackTrace();
+        log.error("Unexpected exception: path={}, type={}", request.getRequestURI(), ex.getClass().getSimpleName());
+        log.error("Exception stack trace:", ex);
         return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                .body(body(HttpStatus.INTERNAL_SERVER_ERROR, "Internal server error: " + ex.getMessage(), request.getRequestURI()));
+                .body(body(HttpStatus.INTERNAL_SERVER_ERROR, "An internal server error occurred. Please try again later.", request.getRequestURI()));
     }
 
     private Map<String, Object> body(HttpStatus status, String message, String path) {

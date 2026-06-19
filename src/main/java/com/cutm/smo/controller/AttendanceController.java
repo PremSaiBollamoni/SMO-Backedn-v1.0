@@ -6,12 +6,15 @@ import com.cutm.smo.dto.CheckOutRequest;
 import com.cutm.smo.dto.MapQrRequest;
 import com.cutm.smo.services.AttendanceService;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
 import java.util.Map;
 
+@Slf4j
 @RestController
 @RequestMapping("/api/attendance")
 @RequiredArgsConstructor
@@ -19,9 +22,10 @@ public class AttendanceController {
 
     private final AttendanceService attendanceService;
 
-    /** Map a temp QR card to an employee for today before check-in. */
     @PostMapping("/map-qr")
+    @PreAuthorize("hasAnyRole('HR', 'ADMIN', 'SUPERVISOR')")
     public ResponseEntity<Map<String, Object>> mapQr(@RequestBody MapQrRequest req) {
+        log.debug("Mapping QR for employee: {}", req.getEmpId());
         var mapping = attendanceService.mapQr(req);
         return ResponseEntity.ok(Map.of(
                 "mappingId", mapping.getMappingId(),
@@ -31,34 +35,39 @@ public class AttendanceController {
         ));
     }
 
-    /** Resolve which employee holds a temp QR today (preview). */
     @GetMapping("/resolve-qr")
+    @PreAuthorize("hasAnyRole('OPERATOR', 'SUPERVISOR', 'HR', 'ADMIN')")
     public ResponseEntity<Map<String, Object>> resolveQr(@RequestParam String qrToken) {
+        log.debug("Resolving QR token");
         Long empId = attendanceService.resolveQrToEmployee(qrToken);
         return ResponseEntity.ok(Map.of("empId", empId));
     }
 
-    /** Check in using scanned temp QR + machine QR. */
     @PostMapping("/checkin")
+    @PreAuthorize("hasAnyRole('OPERATOR', 'CUTTER', 'STITCHER', 'PACKAGER', 'IRONING')")
     public AttendanceRecordDto checkIn(@RequestBody CheckInRequest req) {
+        log.debug("Check-in request received");
         return attendanceService.checkIn(req);
     }
 
-    /** Check out by scanning the temp QR again. */
     @PostMapping("/checkout")
+    @PreAuthorize("hasAnyRole('OPERATOR', 'CUTTER', 'STITCHER', 'PACKAGER', 'IRONING')")
     public AttendanceRecordDto checkOut(@RequestBody CheckOutRequest req) {
+        log.debug("Check-out request received");
         return attendanceService.checkOut(req);
     }
 
-    /** Today's full attendance list. */
     @GetMapping("/today")
+    @PreAuthorize("hasAnyRole('HR', 'ADMIN', 'SUPERVISOR')")
     public List<AttendanceRecordDto> getTodayAttendance() {
+        log.debug("Fetching today's attendance");
         return attendanceService.getTodayAttendance();
     }
 
-    /** Free all temp QR mappings at end of shift/day. */
     @PostMapping("/free-qrs")
+    @PreAuthorize("hasAnyRole('HR', 'ADMIN')")
     public ResponseEntity<Map<String, Object>> freeAllQrs() {
+        log.info("Freeing all QR mappings");
         int count = attendanceService.freeAllQrs();
         return ResponseEntity.ok(Map.of("freed", count));
     }

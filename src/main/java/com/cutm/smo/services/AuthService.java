@@ -8,9 +8,12 @@ import com.cutm.smo.repositories.EmployeeInfoRepository;
 import com.cutm.smo.repositories.EmployeeLoginRepository;
 import com.cutm.smo.repositories.EmployeeRoleRepository;
 import com.cutm.smo.repositories.RoleRepository;
+import com.cutm.smo.security.JwtTokenProvider;
+import com.cutm.smo.security.PasswordUtil;
 import com.cutm.smo.util.LoggingUtil;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
+import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.web.server.ResponseStatusException;
 
@@ -21,15 +24,21 @@ public class AuthService {
     private final EmployeeInfoRepository employeeInfoRepository;
     private final EmployeeRoleRepository employeeRoleRepository;
     private final RoleRepository roleRepository;
+    private final JwtTokenProvider jwtTokenProvider;
+    private final PasswordEncoder passwordEncoder;
 
     public AuthService(EmployeeLoginRepository employeeLoginRepository,
                        EmployeeInfoRepository employeeInfoRepository,
                        EmployeeRoleRepository employeeRoleRepository,
-                       RoleRepository roleRepository) {
+                       RoleRepository roleRepository,
+                       JwtTokenProvider jwtTokenProvider,
+                       PasswordEncoder passwordEncoder) {
         this.employeeLoginRepository = employeeLoginRepository;
         this.employeeInfoRepository = employeeInfoRepository;
         this.employeeRoleRepository = employeeRoleRepository;
         this.roleRepository = roleRepository;
+        this.jwtTokenProvider = jwtTokenProvider;
+        this.passwordEncoder = passwordEncoder;
     }
 
     public LoginResponse login(LoginRequest request) {
@@ -68,8 +77,21 @@ public class AuthService {
             }
             log.debug("User status verified: ACTIVE");
 
-            // Verify password
-            if (!login.getPassword().equals(request.getPassword().trim())) {
+            // Verify password using BCrypt
+            String storedPassword = login.getPassword();
+            String providedPassword = request.getPassword().trim();
+
+            boolean passwordMatches;
+            if (PasswordUtil.isBcryptHashed(storedPassword)) {
+                // Password is already hashed, use BCrypt matching
+                passwordMatches = passwordEncoder.matches(providedPassword, storedPassword);
+            } else {
+                // Fallback for plain text passwords (for migration purposes)
+                log.warn("Plain text password detected for empId: {}. This should be migrated to BCrypt.", empId);
+                passwordMatches = storedPassword.equals(providedPassword);
+            }
+
+            if (!passwordMatches) {
                 log.warn("Login failed: Invalid password for employee ID: {}", empId);
                 LoggingUtil.logAuthenticationAttempt(log, request.getLoginid(), false, "Invalid password");
                 throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Invalid credentials");
@@ -112,17 +134,29 @@ public class AuthService {
             log.debug("User activities: {}", activities);
             log.debug("Multi-roles count: {}", allRoles.size());
 
-            // Create response
+            // Generate JWT token
+            String jwtToken = jwtTokenProvider.generateToken(
+                    empId,
+                    employeeInfo.getEmpName(),
+                    roleName,
+                    activities
+            );
+            String refreshToken = jwtTokenProvider.generateRefreshToken(empId);
+
+            // Create response with JWT token
             LoginResponse response = new LoginResponse(roleName, employeeInfo.getEmpName(),
                     employeeInfo.getEmpId().toString(), activities);
+            response.setToken(jwtToken);
+            response.setRefreshToken(refreshToken);
+            response.setTokenExpiresIn(jwtTokenProvider.getTokenExpirationMs());
             // Attach all roles so Flutter can show role picker if needed
             response.setAllRoles(allRoles);
-            
+
             long endTime = System.currentTimeMillis();
             LoggingUtil.logAuthenticationAttempt(log, request.getLoginid(), true, null);
             LoggingUtil.logPerformance(log, "Authentication", startTime, endTime);
             log.info("=== LOGIN PROCESS END - SUCCESS ===");
-            
+
             return response;
             
         } catch (ResponseStatusException e) {

@@ -9,13 +9,16 @@ import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.responses.ApiResponses;
 import lombok.Data;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.math.BigDecimal;
 import java.util.List;
 
+@Slf4j
 @RestController
 @RequestMapping("/api/hr/operations")
 @CrossOrigin(origins = "*")
@@ -26,13 +29,16 @@ public class OperationController {
     private final OperationRepository operationRepository;
 
     @GetMapping
+    @PreAuthorize("hasAnyRole('HR', 'ADMIN', 'PROCESS_PLANNER', 'SUPERVISOR')")
     @io.swagger.v3.oas.annotations.Operation(summary = "List all active operations", description = "Get all ACTIVE operations sorted by sequence number")
     @ApiResponse(responseCode = "200", description = "Operations list retrieved successfully")
     public List<Operation> getActive() {
+        log.debug("Fetching all active operations");
         return operationRepository.findByStatusOrderBySequenceNoAsc("ACTIVE");
     }
 
     @PostMapping
+    @PreAuthorize("hasAnyRole('ADMIN')")
     @io.swagger.v3.oas.annotations.Operation(summary = "Create new operation", description = "Create a new manufacturing operation with SAM and skill grade")
     @ApiResponses(value = {
         @ApiResponse(responseCode = "200", description = "Operation created successfully"),

@@ -71,6 +71,34 @@ public class EmployeeInfo {
     @Column(name = "status", nullable = false, length = 50)
     private String status;
 
+    @Column(name = "encryption_key_version")
+    private Integer encryptionKeyVersion = 1;
+
+    // ENCRYPTED FIELDS (for migration/compatibility)
+    @Column(name = "encrypted_aadhar_number", length = 512)
+    private String encryptedAadharNumber;
+
+    @Column(name = "encrypted_pan_card_number", length = 512)
+    private String encryptedPanCardNumber;
+
+    @Column(name = "encrypted_phone", length = 512)
+    private String encryptedPhone;
+
+    @Column(name = "encrypted_salary", length = 512)
+    private String encryptedSalary;
+
+    @Column(name = "encrypted_dob", length = 512)
+    private String encryptedDob;
+
+    @Column(name = "encrypted_emergency_contact", length = 512)
+    private String encryptedEmergencyContact;
+
+    @Column(name = "encrypted_blood_group", length = 512)
+    private String encryptedBloodGroup;
+
+    @Column(name = "encrypted_address", length = 512)
+    private String encryptedAddress;
+
     @Column(name = "created_by")
     private Long createdBy;
 
