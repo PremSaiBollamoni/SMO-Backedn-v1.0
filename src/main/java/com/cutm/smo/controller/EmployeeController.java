@@ -52,7 +52,7 @@ public class EmployeeController {
     }
 
     @PostMapping("/employees")
-    @PreAuthorize("hasAnyRole('HR', 'ADMIN')")
+    @PreAuthorize("hasAnyRole('HR', 'ADMIN', 'SUPERVISOR')")
     public EmployeeInfo createEmployee(
             @RequestParam(required = false, defaultValue = "system") String actorEmpId,
             @RequestBody CreateEmployeeRequest request) {
@@ -60,19 +60,19 @@ public class EmployeeController {
     }
 
     @PutMapping("/employees/{id}")
-    @PreAuthorize("hasAnyRole('HR', 'ADMIN')")
+    @PreAuthorize("hasAnyRole('HR', 'ADMIN', 'SUPERVISOR')")
     public EmployeeInfo updateEmployee(@PathVariable Long id, @RequestBody EmployeeInfo employee) {
         return employeeService.updateEmployee(id, employee);
     }
 
     @DeleteMapping("/employees/{id}")
-    @PreAuthorize("hasAnyRole('ADMIN')")
+    @PreAuthorize("hasAnyRole('HR', 'ADMIN')")
     public void deleteEmployee(@PathVariable Long id) {
         employeeService.deleteEmployee(id);
     }
 
     @DeleteMapping("/employees")
-    @PreAuthorize("hasAnyRole('ADMIN')")
+    @PreAuthorize("hasAnyRole('HR', 'ADMIN')")
     public void deleteEmployees(@RequestBody Map<String, List<String>> body) {
         List<String> ids = body.get("empIds");
         if (ids == null || ids.isEmpty())
@@ -107,24 +107,25 @@ public class EmployeeController {
 
     /**
      * Verify that the current user has access to view/modify the employee.
-     * IDOR Protection: Only ADMIN can access any employee, others can only access themselves.
+     * IDOR Protection: Only HR or ADMIN can access other employees, others can only access themselves.
      */
     private void verifyEmployeeAccess(Long empId) {
         Object principal = SecurityContextHolder.getContext().getAuthentication().getPrincipal();
         if (principal instanceof Long) {
             Long currentEmpId = (Long) principal;
-            String currentRole = (String) SecurityContextHolder.getContext().getAuthentication().getCredentials();
-
-            if (!currentEmpId.equals(empId) && !isAdmin(currentRole)) {
+            if (!currentEmpId.equals(empId) && !hasHRorAdminRole()) {
                 throw new ResponseStatusException(HttpStatus.FORBIDDEN, "You do not have permission to access this employee");
             }
         }
     }
 
     /**
-     * Check if the current user has ADMIN role.
+     * Check if the current user has HR or ADMIN role.
      */
-    private boolean isAdmin(String role) {
-        return role != null && role.equalsIgnoreCase("ADMIN");
+    private boolean hasHRorAdminRole() {
+        var auth = SecurityContextHolder.getContext().getAuthentication();
+        if (auth == null) return false;
+        return auth.getAuthorities().stream()
+                .anyMatch(a -> a.getAuthority().equals("ROLE_HR") || a.getAuthority().equals("ROLE_ADMIN"));
     }
 }
