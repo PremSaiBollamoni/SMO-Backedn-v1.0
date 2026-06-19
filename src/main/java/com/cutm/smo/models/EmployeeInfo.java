@@ -76,4 +76,9 @@ public class EmployeeInfo {
 
     @Column(name = "created_at", nullable = false, updatable = false)
     private java.time.LocalDateTime createdAt;
+
+    @jakarta.persistence.PrePersist
+    void prePersist() {
+        if (createdAt == null) createdAt = java.time.LocalDateTime.now();
+    }
 }
