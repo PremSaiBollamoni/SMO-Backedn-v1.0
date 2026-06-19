@@ -2,6 +2,11 @@ package com.cutm.smo.controller;
 
 import com.cutm.smo.models.Operation;
 import com.cutm.smo.repositories.OperationRepository;
+import io.swagger.v3.oas.annotations.tags.Tag;
+import io.swagger.v3.oas.annotations.media.Content;
+import io.swagger.v3.oas.annotations.media.Schema;
+import io.swagger.v3.oas.annotations.responses.ApiResponse;
+import io.swagger.v3.oas.annotations.responses.ApiResponses;
 import lombok.Data;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
@@ -15,17 +20,26 @@ import java.util.List;
 @RequestMapping("/api/hr/operations")
 @CrossOrigin(origins = "*")
 @RequiredArgsConstructor
+@Tag(name = "Operations", description = "Manufacturing operations (34 total: 27 Sub Assembly + 7 Full Garment)")
 public class OperationController {
 
     private final OperationRepository operationRepository;
 
     @GetMapping
+    @io.swagger.v3.oas.annotations.Operation(summary = "List all active operations", description = "Get all ACTIVE operations sorted by sequence number")
+    @ApiResponse(responseCode = "200", description = "Operations list retrieved successfully")
     public List<Operation> getActive() {
         return operationRepository.findByStatusOrderBySequenceNoAsc("ACTIVE");
     }
 
     @PostMapping
-    public Operation create(@RequestBody OperationRequest req) {
+    @io.swagger.v3.oas.annotations.Operation(summary = "Create new operation", description = "Create a new manufacturing operation with SAM and skill grade")
+    @ApiResponses(value = {
+        @ApiResponse(responseCode = "200", description = "Operation created successfully"),
+        @ApiResponse(responseCode = "409", description = "Operation code already exists"),
+        @ApiResponse(responseCode = "400", description = "Invalid request data")
+    })
+    public Operation create(@org.springframework.web.bind.annotation.RequestBody OperationRequest req) {
         if (operationRepository.findByOpCode(req.getOpCode()).isPresent())
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Operation code already exists: " + req.getOpCode());
         Operation op = new Operation();
@@ -41,7 +55,13 @@ public class OperationController {
     }
 
     @PatchMapping("/{opId}/sam")
-    public Operation update(@PathVariable Long opId, @RequestBody OperationRequest req) {
+    @io.swagger.v3.oas.annotations.Operation(summary = "Update operation details", description = "Update operation: name, stage, SAM, skill grade, target pieces, sequence")
+    @ApiResponses(value = {
+        @ApiResponse(responseCode = "200", description = "Operation updated successfully"),
+        @ApiResponse(responseCode = "404", description = "Operation not found"),
+        @ApiResponse(responseCode = "400", description = "Invalid request data")
+    })
+    public Operation update(@PathVariable Long opId, @org.springframework.web.bind.annotation.RequestBody OperationRequest req) {
         Operation op = operationRepository.findById(opId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Operation not found"));
         if (req.getOpName() != null) op.setOpName(req.getOpName());
@@ -54,6 +74,11 @@ public class OperationController {
     }
 
     @DeleteMapping("/{opId}")
+    @io.swagger.v3.oas.annotations.Operation(summary = "Deactivate operation", description = "Mark an operation as INACTIVE")
+    @ApiResponses(value = {
+        @ApiResponse(responseCode = "200", description = "Operation deactivated successfully"),
+        @ApiResponse(responseCode = "404", description = "Operation not found")
+    })
     public void deactivate(@PathVariable Long opId) {
         Operation op = operationRepository.findById(opId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Operation not found"));
