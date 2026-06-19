@@ -30,7 +30,7 @@ public class EmployeeController {
     private final EmployeeExportService employeeExportService;
 
     @GetMapping("/dashboard")
-    @PreAuthorize("hasAnyRole('HR', 'MANAGER')")
+    @PreAuthorize("hasAnyRole('HR')")
     public HrDashboardResponse getDashboard() {
         return employeeService.getDashboard();
     }
