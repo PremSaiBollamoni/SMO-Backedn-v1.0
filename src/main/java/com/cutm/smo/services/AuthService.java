@@ -102,7 +102,7 @@ public class AuthService {
                         java.util.Map<String, Object> rm = new java.util.HashMap<>();
                         rm.put("roleId", role.getRoleId());
                         rm.put("roleName", role.getRoleName());
-                        rm.put("activities", role.getActivity());
+                        rm.put("activities", role.getActivity() != null ? role.getActivity() : "");
                         allRoles.add(rm);
                     });
                 }
