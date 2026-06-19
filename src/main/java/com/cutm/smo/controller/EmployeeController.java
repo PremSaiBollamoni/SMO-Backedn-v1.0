@@ -38,13 +38,13 @@ public class EmployeeController {
     // ── Employees ────────────────────────────────────────────────────────────
 
     @GetMapping("/employees")
-    @PreAuthorize("hasAnyRole('HR', 'MANAGER')")
+    @PreAuthorize("hasAnyRole('HR', 'SUPERVISOR')")
     public List<EmployeeInfo> getAllEmployees() {
         return employeeService.getAllEmployees();
     }
 
     @GetMapping("/employees/{id}")
-    @PreAuthorize("hasAnyRole('HR', 'MANAGER')")
+    @PreAuthorize("hasAnyRole('HR', 'SUPERVISOR')")
     public EmployeeInfo getEmployeeById(@PathVariable Long id) {
         verifyEmployeeAccess(id);
         return employeeService.getEmployeeById(id)

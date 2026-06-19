@@ -23,7 +23,7 @@ public class RoleController {
     private final RoleService roleService;
 
     @GetMapping("/roles")
-    @PreAuthorize("hasAnyRole('HR')")
+    @PreAuthorize("hasAnyRole('HR', 'SUPERVISOR')")
     public List<Role> getAllRoles() {
         log.debug("Fetching all roles");
         return roleService.getAllRoles();
