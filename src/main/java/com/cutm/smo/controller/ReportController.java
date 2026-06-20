@@ -1,7 +1,7 @@
 package com.cutm.smo.controller;
 
 import com.cutm.smo.dto.ReportResponseDto;
-import com.cutm.smo.services.ClaudeService;
+import com.cutm.smo.services.GeminiService;
 import com.cutm.smo.services.ProductionService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.access.prepost.PreAuthorize;
@@ -16,14 +16,14 @@ import java.time.format.DateTimeFormatter;
 public class ReportController {
 
     private final ProductionService productionService;
-    private final ClaudeService claudeService;
+    private final GeminiService geminiService;
 
     @GetMapping("/generate")
     @PreAuthorize("hasAnyRole('HR', 'SUPERVISOR')")
     public ReportResponseDto generateReport() {
         var data = productionService.getEfficiencyToday();
 
-        String insights = claudeService.generateProductionReport(data);
+        String insights = geminiService.generateProductionReport(data);
 
         double overallEff = data.stream()
             .mapToDouble(e -> e.getEfficiencyPct() != null ? e.getEfficiencyPct() : 0)
