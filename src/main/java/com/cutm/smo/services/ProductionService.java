@@ -72,49 +72,52 @@ public class ProductionService {
         return result;
     }
 
-    public StationProductionDto getEmployeeSlotsByDate(Long empId, LocalDate date) {
+    public List<StationProductionDto> getEmployeeSlotsByDate(Long empId, LocalDate date) {
         List<ProductionLog> logs = productionLogRepo.findAllByDate(date).stream()
                 .filter(l -> l.getEmpId().equals(empId))
                 .collect(Collectors.toList());
 
-        StationProductionDto dto = new StationProductionDto();
-        dto.setEmpId(empId);
-        employeeRepo.findById(empId).ifPresent(e -> dto.setEmpName(e.getEmpName()));
+        if (logs.isEmpty()) return Collections.emptyList();
 
-        if (logs.isEmpty()) {
-            dto.setOpName("—");
-            dto.setTargetPcs(50);
-            dto.setSlots(Collections.emptyList());
-            dto.setTotalPieces(0);
-            dto.setEfficiencyPct(0.0);
-            return dto;
+        String empName = employeeRepo.findById(empId).map(e -> e.getEmpName()).orElse("Unknown");
+
+        // Group by workstation so each operation is a separate section
+        Map<Long, List<ProductionLog>> byWs = logs.stream()
+                .collect(Collectors.groupingBy(l -> l.getWorkstation().getWsId()));
+
+        List<StationProductionDto> result = new ArrayList<>();
+        for (List<ProductionLog> wsLogs : byWs.values()) {
+            StationProductionDto dto = new StationProductionDto();
+            dto.setEmpId(empId);
+            dto.setEmpName(empName);
+
+            var ws = wsLogs.get(0).getWorkstation();
+            var op = ws.getOperation();
+            dto.setOpName(op != null ? op.getOpName() : ws.getWsCode());
+            Integer targetPcs = op != null ? op.getTargetPcs() : 50;
+            dto.setTargetPcs(targetPcs);
+
+            List<SlotDto> slots = wsLogs.stream()
+                    .sorted(Comparator.comparing(ProductionLog::getHourSlot))
+                    .map(log -> {
+                        SlotDto slot = new SlotDto();
+                        slot.setHourSlot(log.getHourSlot());
+                        slot.setTimeLabel(slotLabel(log.getHourSlot()));
+                        slot.setPiecesProduced(log.getPiecesProduced());
+                        double slotEff = targetPcs > 0 ? (log.getPiecesProduced() * 100.0 / targetPcs) : 0;
+                        slot.setSlotEfficiencyPct(Math.round(slotEff * 10.0) / 10.0);
+                        return slot;
+                    }).collect(Collectors.toList());
+            dto.setSlots(slots);
+
+            int totalPieces = slots.stream().mapToInt(SlotDto::getPiecesProduced).sum();
+            double dayEff = (targetPcs > 0 && !slots.isEmpty())
+                    ? (totalPieces * 100.0 / (slots.size() * targetPcs)) : 0;
+            dto.setTotalPieces(totalPieces);
+            dto.setEfficiencyPct(Math.round(dayEff * 10.0) / 10.0);
+            result.add(dto);
         }
-
-        var ws = logs.get(0).getWorkstation();
-        var op = ws.getOperation();
-        dto.setOpName(op != null ? op.getOpName() : ws.getWsCode());
-        Integer targetPcs = op != null ? op.getTargetPcs() : 50;
-        dto.setTargetPcs(targetPcs);
-
-        List<SlotDto> slots = logs.stream()
-                .sorted(Comparator.comparing(ProductionLog::getHourSlot))
-                .map(log -> {
-                    SlotDto slot = new SlotDto();
-                    slot.setHourSlot(log.getHourSlot());
-                    slot.setTimeLabel(slotLabel(log.getHourSlot()));
-                    slot.setPiecesProduced(log.getPiecesProduced());
-                    double slotEff = targetPcs > 0 ? (log.getPiecesProduced() * 100.0 / targetPcs) : 0;
-                    slot.setSlotEfficiencyPct(Math.round(slotEff * 10.0) / 10.0);
-                    return slot;
-                }).collect(Collectors.toList());
-        dto.setSlots(slots);
-
-        int totalPieces = slots.stream().mapToInt(SlotDto::getPiecesProduced).sum();
-        double dayEff = (targetPcs > 0 && !slots.isEmpty())
-                ? (totalPieces * 100.0 / (slots.size() * targetPcs)) : 0;
-        dto.setTotalPieces(totalPieces);
-        dto.setEfficiencyPct(Math.round(dayEff * 10.0) / 10.0);
-        return dto;
+        return result;
     }
 
     public List<StationProductionDto> getStationProductionToday(Long wsId) {
