@@ -86,7 +86,7 @@ public class ProductionService {
             dto.setTargetPcs(50);
             dto.setSlots(Collections.emptyList());
             dto.setTotalPieces(0);
-            dto.setEfficiencyPct(0);
+            dto.setEfficiencyPct(0.0);
             return dto;
         }
 
