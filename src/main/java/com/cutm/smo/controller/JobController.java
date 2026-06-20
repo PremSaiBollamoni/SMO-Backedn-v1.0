@@ -6,6 +6,7 @@ import com.cutm.smo.dto.ScanBundleResponse;
 import com.cutm.smo.services.JobService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
@@ -51,5 +52,11 @@ public class JobController {
     @GetMapping
     public List<ActiveJobDto> getAllJobs() {
         return jobService.getAllJobs();
+    }
+
+    @GetMapping("/date")
+    @PreAuthorize("hasAnyRole('HR', 'SUPERVISOR')")
+    public List<ActiveJobDto> getJobsByDate(@RequestParam String date) {
+        return jobService.getJobsByDate(java.time.LocalDate.parse(date));
     }
 }
