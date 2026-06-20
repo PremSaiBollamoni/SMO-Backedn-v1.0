@@ -21,11 +21,10 @@ public class ReportController {
     @GetMapping("/generate")
     @PreAuthorize("hasAnyRole('HR', 'SUPERVISOR')")
     public ReportResponseDto generateReport(@RequestParam(defaultValue = "") String date) {
-        var data = date.isBlank()
-            ? productionService.getEfficiencyToday()
-            : productionService.getEfficiencyByDate(java.time.LocalDate.parse(date));
+        java.time.LocalDate reportDate = date.isBlank() ? java.time.LocalDate.now() : java.time.LocalDate.parse(date);
+        var data = productionService.getEfficiencyByDate(reportDate);
 
-        String insights = geminiService.generateProductionReport(data);
+        String insights = geminiService.generateProductionReport(data, reportDate);
 
         double overallEff = data.stream()
             .mapToDouble(e -> e.getEfficiencyPct() != null ? e.getEfficiencyPct() : 0)

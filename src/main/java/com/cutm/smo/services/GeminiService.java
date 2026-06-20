@@ -21,13 +21,13 @@ public class GeminiService {
     private static final String MODEL = "gemini-3-flash-preview";
     private final RestTemplate restTemplate = new RestTemplate();
 
-    public String generateProductionReport(List<EmployeeEfficiencyDto> data) {
+    public String generateProductionReport(List<EmployeeEfficiencyDto> data, LocalDate date) {
         if (apiKey == null || apiKey.isBlank()) {
             return "API key not configured. Set GEMINI_API_KEY environment variable.";
         }
 
         String url = "https://generativelanguage.googleapis.com/v1beta/models/" + MODEL + ":generateContent?key=" + apiKey;
-        String prompt = buildPrompt(data);
+        String prompt = buildPrompt(data, date);
 
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(MediaType.APPLICATION_JSON);
@@ -53,9 +53,9 @@ public class GeminiService {
         }
     }
 
-    private String buildPrompt(List<EmployeeEfficiencyDto> data) {
+    private String buildPrompt(List<EmployeeEfficiencyDto> data, LocalDate date) {
         StringBuilder sb = new StringBuilder();
-        sb.append("You are a garment factory production analyst. Analyze today's (").append(LocalDate.now()).append(") production data and generate a detailed professional report.\n\n");
+        sb.append("You are a garment factory production analyst. Analyze the production data for ").append(date).append(" and generate a detailed professional report.\n\n");
         sb.append("PRODUCTION DATA:\n");
         int totalPieces = 0;
         for (EmployeeEfficiencyDto emp : data) {
