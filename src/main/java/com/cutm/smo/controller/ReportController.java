@@ -20,8 +20,10 @@ public class ReportController {
 
     @GetMapping("/generate")
     @PreAuthorize("hasAnyRole('HR', 'SUPERVISOR')")
-    public ReportResponseDto generateReport() {
-        var data = productionService.getEfficiencyToday();
+    public ReportResponseDto generateReport(@RequestParam(defaultValue = "") String date) {
+        var data = date.isBlank()
+            ? productionService.getEfficiencyToday()
+            : productionService.getEfficiencyByDate(java.time.LocalDate.parse(date));
 
         String insights = geminiService.generateProductionReport(data);
 
