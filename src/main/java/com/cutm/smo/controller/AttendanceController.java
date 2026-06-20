@@ -64,6 +64,13 @@ public class AttendanceController {
         return attendanceService.getTodayAttendance();
     }
 
+    @GetMapping("/date")
+    @PreAuthorize("hasAnyRole('HR', 'SUPERVISOR')")
+    public List<AttendanceRecordDto> getAttendanceByDate(@RequestParam String date) {
+        log.debug("Fetching attendance for date: {}", date);
+        return attendanceService.getAttendanceByDate(java.time.LocalDate.parse(date));
+    }
+
     @PostMapping("/free-qrs")
     @PreAuthorize("hasAnyRole('HR')")
     public ResponseEntity<Map<String, Object>> freeAllQrs() {

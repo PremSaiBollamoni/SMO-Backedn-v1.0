@@ -107,7 +107,12 @@ public class AttendanceService {
 
     /** Get all attendance records for today. */
     public List<AttendanceRecordDto> getTodayAttendance() {
-        return attendanceRepo.findByAttDateOrderByCheckInAsc(LocalDate.now())
+        return getAttendanceByDate(LocalDate.now());
+    }
+
+    /** Get all attendance records for a specific date. */
+    public List<AttendanceRecordDto> getAttendanceByDate(LocalDate date) {
+        return attendanceRepo.findByAttDateOrderByCheckInAsc(date)
                 .stream().map(this::toDto).collect(Collectors.toList());
     }
 
