@@ -32,7 +32,7 @@ public class ProductionController {
 
     @GetMapping("/employee/{empId}/slots")
     @PreAuthorize("hasAnyRole('HR', 'SUPERVISOR')")
-    public StationProductionDto getEmployeeSlots(@PathVariable Long empId, @RequestParam String date) {
+    public List<StationProductionDto> getEmployeeSlots(@PathVariable Long empId, @RequestParam String date) {
         return productionService.getEmployeeSlotsByDate(empId, LocalDate.parse(date));
     }
 
