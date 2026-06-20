@@ -20,16 +20,16 @@ public class ProductionService {
     private final ProductionLogRepository productionLogRepo;
     private final EmployeeRepository employeeRepo;
 
-    private static final Map<Integer, String> SLOT_LABELS = Map.of(
-        1, "9:00-10:00",
-        2, "10:00-11:00",
-        3, "11:00-12:00",
-        4, "12:00-1:00",
-        5, "1:30-2:30",
-        6, "2:30-3:30",
-        7, "3:30-4:30",
-        8, "4:30-5:30"
-    );
+    private static String slotLabel(int hour) {
+        // Legacy 1-8 slots
+        if (hour <= 8) {
+            String[] labels = {"9:00-10:00","10:00-11:00","11:00-12:00","12:00-1:00","1:30-2:30","2:30-3:30","3:30-4:30","4:30-5:30"};
+            return hour >= 1 && hour <= 8 ? labels[hour - 1] : "Slot " + hour;
+        }
+        // Actual hour-based slots (e.g. 10 → "10:00-11:00")
+        int end = hour + 1;
+        return String.format("%d:00-%d:00", hour, end);
+    }
 
     public List<EmployeeEfficiencyDto> getEfficiencyToday() {
         return getEfficiencyByDate(LocalDate.now());
@@ -72,6 +72,51 @@ public class ProductionService {
         return result;
     }
 
+    public StationProductionDto getEmployeeSlotsByDate(Long empId, LocalDate date) {
+        List<ProductionLog> logs = productionLogRepo.findAllByDate(date).stream()
+                .filter(l -> l.getEmpId().equals(empId))
+                .collect(Collectors.toList());
+
+        StationProductionDto dto = new StationProductionDto();
+        dto.setEmpId(empId);
+        employeeRepo.findById(empId).ifPresent(e -> dto.setEmpName(e.getEmpName()));
+
+        if (logs.isEmpty()) {
+            dto.setOpName("—");
+            dto.setTargetPcs(50);
+            dto.setSlots(Collections.emptyList());
+            dto.setTotalPieces(0);
+            dto.setEfficiencyPct(0);
+            return dto;
+        }
+
+        var ws = logs.get(0).getWorkstation();
+        var op = ws.getOperation();
+        dto.setOpName(op != null ? op.getOpName() : ws.getWsCode());
+        Integer targetPcs = op != null ? op.getTargetPcs() : 50;
+        dto.setTargetPcs(targetPcs);
+
+        List<SlotDto> slots = logs.stream()
+                .sorted(Comparator.comparing(ProductionLog::getHourSlot))
+                .map(log -> {
+                    SlotDto slot = new SlotDto();
+                    slot.setHourSlot(log.getHourSlot());
+                    slot.setTimeLabel(slotLabel(log.getHourSlot()));
+                    slot.setPiecesProduced(log.getPiecesProduced());
+                    double slotEff = targetPcs > 0 ? (log.getPiecesProduced() * 100.0 / targetPcs) : 0;
+                    slot.setSlotEfficiencyPct(Math.round(slotEff * 10.0) / 10.0);
+                    return slot;
+                }).collect(Collectors.toList());
+        dto.setSlots(slots);
+
+        int totalPieces = slots.stream().mapToInt(SlotDto::getPiecesProduced).sum();
+        double dayEff = (targetPcs > 0 && !slots.isEmpty())
+                ? (totalPieces * 100.0 / (slots.size() * targetPcs)) : 0;
+        dto.setTotalPieces(totalPieces);
+        dto.setEfficiencyPct(Math.round(dayEff * 10.0) / 10.0);
+        return dto;
+    }
+
     public List<StationProductionDto> getStationProductionToday(Long wsId) {
         List<ProductionLog> logs = productionLogRepo.findByWsIdAndDate(wsId, LocalDate.now());
 
@@ -100,7 +145,7 @@ public class ProductionService {
                     .map(log -> {
                         SlotDto slot = new SlotDto();
                         slot.setHourSlot(log.getHourSlot());
-                        slot.setTimeLabel(SLOT_LABELS.getOrDefault(log.getHourSlot(), "Slot " + log.getHourSlot()));
+                        slot.setTimeLabel(slotLabel(log.getHourSlot()));
                         slot.setPiecesProduced(log.getPiecesProduced());
                         double slotEff = targetPcs > 0 ? (log.getPiecesProduced() * 100.0 / targetPcs) : 0;
                         slot.setSlotEfficiencyPct(Math.round(slotEff * 10.0) / 10.0);

@@ -2,6 +2,7 @@ package com.cutm.smo.controller;
 
 import com.cutm.smo.dto.EmployeeEfficiencyDto;
 import com.cutm.smo.dto.StationProductionDto;
+import java.time.LocalDate;
 import com.cutm.smo.services.ProductionService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.access.prepost.PreAuthorize;
@@ -27,6 +28,12 @@ public class ProductionController {
     @PreAuthorize("hasAnyRole('HR', 'SUPERVISOR')")
     public List<EmployeeEfficiencyDto> getEfficiencyByDate(@RequestParam String date) {
         return productionService.getEfficiencyByDate(LocalDate.parse(date));
+    }
+
+    @GetMapping("/employee/{empId}/slots")
+    @PreAuthorize("hasAnyRole('HR', 'SUPERVISOR')")
+    public StationProductionDto getEmployeeSlots(@PathVariable Long empId, @RequestParam String date) {
+        return productionService.getEmployeeSlotsByDate(empId, LocalDate.parse(date));
     }
 
     @GetMapping("/station/{wsId}/today")
