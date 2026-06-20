@@ -158,6 +158,7 @@ public class JobService {
             dto.setStartTime(j.getStartTime());
             dto.setElapsedSeconds(ChronoUnit.SECONDS.between(j.getStartTime(), LocalDateTime.now()));
             dto.setStatus(j.getStatus());
+            dto.setTargetPcs(j.getOperation().getTargetPcs());
             empRepo.findById(j.getEmpId()).ifPresent(e -> dto.setEmpName(e.getEmpName()));
             return dto;
         }).toList();
@@ -179,6 +180,33 @@ public class JobService {
             dto.setStartTime(j.getStartTime());
             dto.setElapsedSeconds(ChronoUnit.SECONDS.between(j.getStartTime(), LocalDateTime.now()));
             dto.setStatus(j.getStatus());
+            dto.setTargetPcs(j.getOperation().getTargetPcs());
+            empRepo.findById(j.getEmpId()).ifPresent(e -> dto.setEmpName(e.getEmpName()));
+            return dto;
+        }).toList();
+    }
+
+    public List<ActiveJobDto> getAllJobs() {
+        return jobRepo.findAll().stream().map(j -> {
+            ActiveJobDto dto = new ActiveJobDto();
+            dto.setJobId(j.getJobId());
+            dto.setEmpId(j.getEmpId());
+            dto.setWsId(j.getWorkstation().getWsId());
+            dto.setWsCode(j.getWorkstation().getWsCode());
+            dto.setOpName(j.getOperation().getOpName());
+            dto.setSkillGrade(j.getOperation().getSkillGrade());
+            dto.setBarcode(j.getTray() != null ? j.getTray().getTrayNumber() : "UNKNOWN");
+            dto.setBundleQty(j.getBundleQty());
+            dto.setSamValue(j.getSamValue());
+            dto.setEstMinutes(j.getEstMinutes());
+            dto.setStartTime(j.getStartTime());
+            dto.setEndTime(j.getEndTime());
+            dto.setElapsedSeconds(j.getEndTime() != null
+                ? ChronoUnit.SECONDS.between(j.getStartTime(), j.getEndTime())
+                : ChronoUnit.SECONDS.between(j.getStartTime(), LocalDateTime.now()));
+            dto.setStatus(j.getStatus());
+            dto.setEfficiencyPct(j.getEfficiencyPct());
+            dto.setTargetPcs(j.getOperation().getTargetPcs());
             empRepo.findById(j.getEmpId()).ifPresent(e -> dto.setEmpName(e.getEmpName()));
             return dto;
         }).toList();

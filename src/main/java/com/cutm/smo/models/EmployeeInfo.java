@@ -1,5 +1,6 @@
 package com.cutm.smo.models;
 
+import com.cutm.smo.util.EncryptedStringConverter;
 import com.fasterxml.jackson.annotation.JsonManagedReference;
 import jakarta.persistence.*;
 import lombok.Data;
@@ -62,9 +63,11 @@ public class EmployeeInfo {
     @Column(name = "emergency_contact", length = 20)
     private String emergencyContact;
 
+    @Convert(converter = EncryptedStringConverter.class)
     @Column(name = "aadhar_number", length = 512)
     private String aadharNumber;
 
+    @Convert(converter = EncryptedStringConverter.class)
     @Column(name = "pan_card_number", length = 512)
     private String panCardNumber;
 

@@ -20,4 +20,7 @@ public class ActiveJobDto {
     private LocalDateTime startTime;
     private Long elapsedSeconds;
     private String status;
+    private LocalDateTime endTime;
+    private BigDecimal efficiencyPct;
+    private Integer targetPcs;
 }

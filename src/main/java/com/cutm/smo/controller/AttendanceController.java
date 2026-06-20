@@ -44,14 +44,14 @@ public class AttendanceController {
     }
 
     @PostMapping("/checkin")
-    @PreAuthorize("hasAnyRole('OPERATOR', 'CUTTER', 'STITCHER', 'PACKAGER', 'IRONING')")
+    @PreAuthorize("hasAnyRole('HR', 'SUPERVISOR', 'OPERATOR', 'CUTTER', 'STITCHER', 'PACKAGER', 'IRONING')")
     public AttendanceRecordDto checkIn(@RequestBody CheckInRequest req) {
         log.debug("Check-in request received");
         return attendanceService.checkIn(req);
     }
 
     @PostMapping("/checkout")
-    @PreAuthorize("hasAnyRole('OPERATOR', 'CUTTER', 'STITCHER', 'PACKAGER', 'IRONING')")
+    @PreAuthorize("hasAnyRole('HR', 'SUPERVISOR', 'OPERATOR', 'CUTTER', 'STITCHER', 'PACKAGER', 'IRONING')")
     public AttendanceRecordDto checkOut(@RequestBody CheckOutRequest req) {
         log.debug("Check-out request received");
         return attendanceService.checkOut(req);

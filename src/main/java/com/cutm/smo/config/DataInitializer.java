@@ -31,22 +31,20 @@ public class DataInitializer implements CommandLineRunner {
     @Override
     public void run(String... args) {
 
-        Role hrAdminRole = ensureRole("HR/Admin",
-                "HR_DASHBOARD,ROLE_MANAGEMENT,EMPLOYEE_MANAGEMENT,PROFILE_MANAGEMENT", "ACTIVE");
+        Role hrRole = ensureRole("HR",
+                "HR_DASHBOARD,HR_MANAGE_ROLES,HR_MANAGE_EMPLOYEES,HR_ATTENDANCE_REPORT,PROFILE_MANAGEMENT", "ACTIVE");
 
-        Role supervisorRole = ensureRole("Supervisor",
-                "SUPERVISOR_DASHBOARD,SUPERVISOR_MONITORING,SUPERVISOR_REPORTS,PROFILE_MANAGEMENT", "ACTIVE");
+        Role supervisorRole = ensureRole("SUPERVISOR",
+                "SUPERVISOR_WORK_ASSIGNMENT,SUPERVISOR_EFFICIENCY,SUPERVISOR_HISTORY,SUPERVISOR_ATTENDANCE,SUPERVISOR_LINE_BALANCING,PROFILE_MANAGEMENT", "ACTIVE");
 
-        Role gmRole = ensureRole("General Manager (GM)",
-                "GM_VIEW_PRODUCTION,GM_VIEW_INVENTORY_ANALYSIS,GM_VIEW_REPORTS,PP_APPROVE,PP_VIEW_ALL,PP_VIEW_NODE_METRICS,PROFILE_MANAGEMENT", "ACTIVE");
+        Role gmRole = ensureRole("GM",
+                "GM_VIEW_PRODUCTION,GM_VIEW_REPORTS,GM_VIEW_EFFICIENCY,PROFILE_MANAGEMENT", "ACTIVE");
 
         Role processPlannerRole = ensureRole("Process Planner",
                 "PROCESS_ROUTING,PROCESS_STAGES,MACHINE_ASSIGNMENT,PARALLEL_STEPS,MERGE_POINTS,STANDARD_TIME,WIP_LIMITS,PROFILE_MANAGEMENT", "ACTIVE");
 
-        ensureEmployeeWithLogin(1001L, "HR Admin", hrAdminRole, "hr123");
-        ensureEmployeeWithLogin(1002L, "Supervisor One", supervisorRole, "supervisor123");
-        ensureEmployeeWithLogin(1003L, "General Manager", gmRole, "gm123");
-        ensureEmployeeWithLogin(1004L, "Process Planner", processPlannerRole, "planner123");
+        ensureEmployeeWithLogin(1001L, "Super", supervisorRole, "pass");
+        ensureEmployeeWithLogin(1006L, "HR", hrRole, "pass");
     }
 
     private void ensureEmployeeWithLogin(Long empId, String empName, Role role, String password) {

@@ -8,6 +8,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.web.authentication.WebAuthenticationDetailsSource;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
@@ -15,6 +16,7 @@ import org.springframework.web.filter.OncePerRequestFilter;
 
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.List;
 
 /**
  * JWT Authentication Filter for processing JWT tokens from HTTP requests.
@@ -40,12 +42,27 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
                 String role = jwtTokenProvider.getRoleFromToken(jwt);
                 String activities = jwtTokenProvider.getActivitiesFromToken(jwt);
 
-                // Create authentication token with employee details
+                // Create authorities list based on the role
+                List<SimpleGrantedAuthority> authorities = new ArrayList<>();
+                if (StringUtils.hasText(role)) {
+                    String cleanRole = role.toUpperCase().trim();
+                    // Prefix with ROLE_ as required by hasRole / hasAnyRole in Spring Security
+                    authorities.add(new SimpleGrantedAuthority("ROLE_" + cleanRole));
+                    
+                    // Split composite roles like HR/Admin to also grant ROLE_HR and ROLE_ADMIN
+                    if (cleanRole.contains("/")) {
+                        for (String subRole : cleanRole.split("/")) {
+                            authorities.add(new SimpleGrantedAuthority("ROLE_" + subRole.trim()));
+                        }
+                    }
+                }
+
+                // Create authentication token with employee details and authorities
                 UsernamePasswordAuthenticationToken authentication =
                         new UsernamePasswordAuthenticationToken(
                                 empId,
                                 null,
-                                new ArrayList<>()
+                                authorities
                         );
                 authentication.setDetails(new WebAuthenticationDetailsSource().buildDetails(request));
 
