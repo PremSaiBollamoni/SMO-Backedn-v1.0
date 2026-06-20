@@ -18,7 +18,7 @@ public class GeminiService {
     @Value("${gemini.api.key:}")
     private String apiKey;
 
-    private static final String MODEL = "gemini-2.0-flash-preview";
+    private static final String MODEL = "gemini-3-flash-preview";
     private final RestTemplate restTemplate = new RestTemplate();
 
     public String generateProductionReport(List<EmployeeEfficiencyDto> data) {
